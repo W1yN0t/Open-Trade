@@ -51,7 +51,7 @@ Millions of people want to trade but are scared of the UI. OpenTrade removes the
 ```
 You send a message
         ↓
-LLM parses the intent (Claude / GPT / DeepSeek / local)
+LLM parses the intent via Vercel AI SDK (Claude / GPT / DeepSeek / Gemini / Ollama)
         ↓
 Agent fetches real-time data (prices, balances, fees)
         ↓

@@ -1,0 +1,31 @@
+{
+  "name": "opentrade",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^1.2.0",
+    "@prisma/client": "^6.5.0",
+    "ai": "^4.3.0",
+    "dotenv": "^16.4.7",
+    "grammy": "^1.31.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "prisma": "^6.5.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.1"
+  }
+}

@@ -1,0 +1,40 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model ChatMessage {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  role      String
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model UserSettings {
+  userId    String   @id
+  model     String   @default("anthropic/claude-3-5-sonnet")
+  updatedAt DateTime @updatedAt
+}
+
+model PendingConfirmation {
+  id            String   @id @default(cuid())
+  userId        String
+  chatId        String
+  messageId     String?
+  intent        Json
+  state         String   @default("CREATED")
+  subState      String?
+  expectedInput String?
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+
+  @@index([userId, state])
+  @@index([expiresAt, state])
+}

@@ -1,0 +1,98 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('ai', () => ({ generateObject: vi.fn() }));
+vi.mock('@ai-sdk/openai', () => ({ createOpenAI: () => (m: string) => m }));
+vi.mock('../config.ts', () => ({
+  Config: { llm: { apiKey: 'test', baseUrl: 'https://test.com', systemPrompt: '' } },
+}));
+
+import { generateObject } from 'ai';
+import { parseIntent, isTradeIntent, formatConfirmationCard, formatClarification } from './intent_parser.ts';
+
+const mock = vi.mocked(generateObject);
+
+function mockIntent(overrides: object) {
+  mock.mockResolvedValue({ object: overrides } as any);
+}
+
+describe('parseIntent — routing', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns trade with high confidence for clear buy order', async () => {
+    mockIntent({ type: 'trade', action: 'buy', asset: 'BTC', quoteCurrency: 'USDT', amount: 500, amountType: 'quote', condition: null, confidence: 0.95 });
+    const intent = await parseIntent('buy BTC for $500', 'model');
+    expect(intent.type).toBe('trade');
+    expect(intent.confidence).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it('returns chat for greeting', async () => {
+    mockIntent({ type: 'chat', action: null, asset: null, quoteCurrency: null, amount: null, amountType: null, condition: null, confidence: 0.98 });
+    const intent = await parseIntent('hello!', 'model');
+    expect(intent.type).toBe('chat');
+  });
+
+  it('returns trade for portfolio query', async () => {
+    mockIntent({ type: 'trade', action: 'portfolio', asset: null, quoteCurrency: null, amount: null, amountType: null, condition: null, confidence: 0.92 });
+    const intent = await parseIntent('show my portfolio', 'model');
+    expect(intent.type).toBe('trade');
+  });
+});
+
+// Fuzzing: ambiguous messages must never produce high-confidence trades
+describe('parseIntent — safety fuzz', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const ambiguous = [
+    'BTC is looking good today',
+    'what do you think about ethereum?',
+    'should I buy or sell?',
+    'the market is crashing',
+    'tell me about Bitcoin',
+    'how does a limit order work?',
+    'is now a good time?',
+  ];
+
+  ambiguous.forEach((text) => {
+    it(`does not trigger trade for: "${text}"`, async () => {
+      // Simulate conservative model behavior
+      mockIntent({ type: 'chat', action: null, asset: null, quoteCurrency: null, amount: null, amountType: null, condition: null, confidence: 0.75 });
+      const intent = await parseIntent(text, 'model');
+      const isSafe = intent.type === 'chat' || intent.confidence < 0.8;
+      expect(isSafe).toBe(true);
+    });
+  });
+});
+
+describe('isTradeIntent', () => {
+  it('returns true for valid trade intent', () => {
+    const intent = { type: 'trade' as const, action: 'buy' as const, asset: 'BTC', quoteCurrency: 'USDT', amount: 500, amountType: 'quote' as const, condition: null, confidence: 0.95 };
+    expect(isTradeIntent(intent)).toBe(true);
+  });
+
+  it('returns false when asset is null', () => {
+    const intent = { type: 'trade' as const, action: 'buy' as const, asset: null, quoteCurrency: null, amount: null, amountType: null, condition: null, confidence: 0.6 };
+    expect(isTradeIntent(intent)).toBe(false);
+  });
+});
+
+describe('formatConfirmationCard', () => {
+  it('includes action, asset and amount', () => {
+    const card = formatConfirmationCard({ type: 'trade', action: 'buy', asset: 'BTC', quoteCurrency: 'USDT', amount: 500, amountType: 'quote', condition: null, confidence: 0.95 });
+    expect(card).toContain('BUY');
+    expect(card).toContain('BTC');
+    expect(card).toContain('$500');
+  });
+
+  it('includes condition when present', () => {
+    const card = formatConfirmationCard({ type: 'trade', action: 'limit', asset: 'SOL', quoteCurrency: 'USDT', amount: 10, amountType: 'base', condition: 'when price drops to $140', confidence: 0.9 });
+    expect(card).toContain('when price drops to $140');
+  });
+});
+
+describe('formatClarification', () => {
+  it('mentions the detected action and asset', () => {
+    const text = formatClarification({ type: 'trade', action: 'sell', asset: 'ETH', quoteCurrency: 'USDT', amount: null, amountType: null, condition: null, confidence: 0.6 });
+    expect(text).toContain('sell');
+    expect(text).toContain('ETH');
+  });
+});

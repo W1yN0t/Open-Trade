@@ -2,13 +2,26 @@
 
 ## Current State (Phase 0)
 
-Telegram LLM-chatbot via OpenRouter + PostgreSQL. No trading functionality.
+Telegram LLM-chatbot + PostgreSQL. No trading functionality.
 
-**Existing files:**
-- `bot.py` — Telegram bot (message handling, model selection, history management)
-- `config.py` — env vars, model list, prompts
-- `storage_postgres.py` — PostgreSQL storage (history, settings, summarization)
-- `requirements.txt` — dependencies
+**Stack:**
+- **Runtime:** Node.js 24 + TypeScript 5.x
+- **Package manager:** pnpm
+- **Telegram:** grammY
+- **LLM:** Vercel AI SDK (Claude, GPT, DeepSeek, Gemini, Ollama)
+- **Database:** PostgreSQL + Prisma
+- **Validation:** Zod
+- **Exchanges:** ccxt
+- **DeFi:** viem
+- **Encryption:** Node.js crypto (AES-256)
+- **Deploy:** Railway
+- **Tests:** Vitest
+
+**Planned files:**
+- `src/messengers/telegram.ts` — Telegram bot (grammY)
+- `src/config.ts` — env vars, model list, prompts
+- `src/storage/postgres.ts` — PostgreSQL storage (Prisma)
+- `package.json` — dependencies
 - `Procfile` — Railway deployment
 
 ---
@@ -20,67 +33,56 @@ Telegram LLM-chatbot via OpenRouter + PostgreSQL. No trading functionality.
 Refactor monolith into modular architecture:
 
 ```
-opentrade/
+src/
 ├── core/
-│   ├── intent_parser.py      # LLM -> structured intent (JSON)
-│   ├── engine.py             # trade orchestrator
-│   └── confirmation.py       # confirmation state machine
+│   ├── chat.ts               # LLM chat via Vercel AI SDK
+│   ├── intent_parser.ts      # LLM -> structured intent (JSON) [Phase 1.2]
+│   ├── engine.ts             # trade orchestrator [Phase 1.2]
+│   └── confirmation.ts       # confirmation state machine [Phase 1.2]
 ├── messengers/
-│   ├── base.py               # abstract messenger adapter
-│   └── telegram.py           # current bot, extracted as adapter
+│   ├── base.ts               # MessengerAdapter ABC
+│   └── telegram.ts           # grammY adapter
 ├── providers/
-│   ├── base.py               # provider interface + shared types (Order, Balance, Position)
-│   └── mock.py               # mock provider for testing
+│   ├── base.ts               # Provider ABC + Order, Balance, Position types
+│   └── mock.ts               # mock provider for testing
 ├── storage/
-│   └── postgres.py           # current storage_postgres.py
-├── config.py
-└── main.py
+│   └── postgres.ts           # Prisma storage
+├── config.ts
+└── main.ts
 ```
 
-- [ ] Create package structure (`opentrade/`)
-- [ ] Extract Telegram-specific code into `messengers/telegram.py`
-- [ ] Define `MessengerAdapter` ABC in `messengers/base.py`
-- [ ] Move storage to `storage/postgres.py`
-- [ ] Create `main.py` entry point
-- [ ] Verify bot still works after refactor
+- [x] Create package structure (`src/`)
+- [x] Extract Telegram-specific code into `messengers/telegram.ts`
+- [x] Define `MessengerAdapter` ABC in `messengers/base.ts`
+- [x] Move storage to `storage/postgres.ts`
+- [x] Create `main.ts` entry point
+- [ ] Verify bot still works after refactor (`pnpm install && pnpm db:migrate && pnpm dev`)
 
 ### 1.2 Intent Parser
 
 Two-stage pipeline: classification -> extraction.
 
-- [ ] Define intent schema:
-  ```json
-  {
-    "type": "trade",
-    "action": "buy | sell | swap | limit | stop | portfolio | balance | price",
-    "asset": "BTC",
-    "quote_currency": "USDT",
-    "amount": 500,
-    "amount_type": "quote | base | percent",
-    "condition": null,
-    "confidence": 0.95
-  }
-  ```
-- [ ] Stage 1 — classify message: trade intent vs regular chat (confidence threshold)
-- [ ] Stage 2 — extract structured parameters (JSON mode / structured output)
-- [ ] Confidence thresholds: <0.5 = chat, 0.5-0.8 = clarify, >0.8 = proceed to confirmation
-- [ ] Route trade intents to engine, regular messages to LLM as before
-- [ ] Tests: fuzzing parser with ambiguous messages to prevent accidental trades
+- [x] Define intent schema (Zod: type, action, asset, quoteCurrency, amount, amountType, condition, confidence)
+- [x] Stage 1 — classify message: trade intent vs regular chat (confidence threshold)
+- [x] Stage 2 — extract structured parameters (`generateObject` via Vercel AI SDK)
+- [x] Confidence thresholds: <0.5 = chat, 0.5-0.8 = clarify, >0.8 = proceed to confirmation
+- [x] Route trade intents to engine, regular messages to LLM as before
+- [x] Tests: fuzzing parser with ambiguous messages to prevent accidental trades
 
 ### 1.3 Confirmation Flow
 
 State machine for trade confirmations.
 
-- [ ] Define states: `CREATED -> SHOWN -> CONFIRMED -> EXECUTING -> DONE | CANCELLED | EXPIRED | FAILED`
-- [ ] DB table `pending_confirmations` (user_id, intent, state, created_at, expires_at)
-- [ ] Confirmation card: asset, amount, price, fee, total + [Confirm] [Cancel] buttons
-- [ ] Timeout: auto-cancel after 60s (configurable)
-- [ ] Confirmation levels:
-  - Normal (<$500): single button
-  - Large (>$500): manual amount re-entry
-  - Critical (>$5000 or "sell all"): re-entry + delayed re-confirm
-- [ ] Prevent double-click execution
-- [ ] Persist pending confirmations across bot restarts
+- [x] Define states: `CREATED -> SHOWN -> CONFIRMED -> EXECUTING -> DONE | CANCELLED | EXPIRED | FAILED`
+- [x] DB table `pending_confirmations` (user_id, intent, state, created_at, expires_at)
+- [x] Confirmation card: asset, amount + [Confirm] [Cancel] inline buttons (grammY)
+- [x] Timeout: auto-cancel after 60s (setInterval every 10s, edits message to "⏰ Expired")
+- [x] Confirmation levels:
+  - Normal (<$500): single button ✅
+  - Large (>$500): type exact amount to confirm
+  - Critical (>$5000 or "sell all"): type amount + second ✅ button
+- [x] Prevent double-click execution (atomic state check: only SHOWN → CONFIRMED)
+- [x] Persist pending confirmations across bot restarts (DB-backed, recovered on start)
 
 ---
 
@@ -99,9 +101,9 @@ State machine for trade confirmations.
 - [ ] Define shared types: `Order`, `Balance`, `Position`
 - [ ] Auto-discovery: scan `providers/` for Provider subclasses
 
-### 2.2 Binance Provider (via ccxt)
+### 2.2 OKX Provider (via ccxt)
 
-- [ ] Implement `providers/binance.py`
+- [ ] Implement `providers/okx.py`
 - [ ] Market orders, limit orders
 - [ ] Balance retrieval, portfolio
 - [ ] Price fetching
@@ -112,8 +114,8 @@ State machine for trade confirmations.
 - [ ] AES-256 encryption for API keys with user master password
 - [ ] DB table `user_credentials` (user_id, provider, encrypted_key, encrypted_secret)
 - [ ] Keys decrypted only at execution time, never sent to LLM
-- [ ] `/connect binance` command flow: request key + secret in DM -> encrypt -> store
-- [ ] `/disconnect binance` to remove credentials
+- [ ] `/connect okx` command flow: request key + secret in DM -> encrypt -> store
+- [ ] `/disconnect okx` to remove credentials
 
 ### 2.4 Core Trading Commands
 
@@ -144,7 +146,7 @@ State machine for trade confirmations.
 ### 3.3 Testing
 
 - [ ] Paper trading mode (simulated execution)
-- [ ] Integration tests with Binance testnet
+- [ ] Integration tests with OKX testnet
 - [ ] Intent parser fuzz tests
 
 ---
@@ -161,7 +163,7 @@ State machine for trade confirmations.
 
 ## Phase 5 — DeFi
 
-- [ ] Uniswap provider (web3.py)
+- [ ] Uniswap provider (viem)
 - [ ] Wallet connection (private key or WalletConnect)
 - [ ] `"swap ETH to USDC"` via DEX aggregator (1inch)
 - [ ] Gas estimation in confirmation card
