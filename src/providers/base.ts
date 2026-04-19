@@ -27,7 +27,8 @@ export interface Position {
 export interface ProviderCredentials {
   apiKey: string;
   apiSecret: string;
-  [key: string]: string;
+  password?: string;
+  [key: string]: string | undefined;
 }
 
 export abstract class Provider {

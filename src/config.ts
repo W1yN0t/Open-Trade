@@ -7,6 +7,9 @@ export const Config = {
   database: {
     url: process.env.DATABASE_URL!,
   },
+  credentials: {
+    masterPassword: process.env.MASTER_PASSWORD ?? '',
+  },
   llm: {
     apiKey: process.env.LLM_API_KEY!,
     model: process.env.LLM_MODEL ?? 'anthropic/claude-3-5-sonnet',

@@ -20,7 +20,7 @@ export class PostgresStorage {
       orderBy: { createdAt: 'asc' },
       take: limit,
     });
-    return messages.map(m => ({ role: m.role as MessageRole, content: m.content }));
+    return messages.map((m: { role: string; content: string }) => ({ role: m.role as MessageRole, content: m.content }));
   }
 
   async addMessage(userId: string, role: MessageRole, content: string): Promise<void> {
@@ -93,11 +93,11 @@ export class PostgresStorage {
     if (stale.length === 0) return [];
 
     await this.prisma.pendingConfirmation.updateMany({
-      where: { id: { in: stale.map(s => s.id) } },
+      where: { id: { in: stale.map((s: { id: string }) => s.id) } },
       data: { state: 'EXPIRED' },
     });
 
-    return stale.map(r => this.toConfirmation(r));
+    return stale.map((r: object) => this.toConfirmation(r));
   }
 
   // ── Misc ──────────────────────────────────────────────────────────────────

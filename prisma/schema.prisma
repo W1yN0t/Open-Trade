@@ -38,3 +38,18 @@ model PendingConfirmation {
   @@index([userId, state])
   @@index([expiresAt, state])
 }
+
+model UserCredentials {
+  id                String   @id @default(cuid())
+  userId            String
+  provider          String
+  encryptedKey      String
+  encryptedSecret   String
+  encryptedPassword String?
+  salt              String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([userId, provider])
+  @@index([userId])
+}

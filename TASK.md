@@ -56,7 +56,7 @@ src/
 - [x] Define `MessengerAdapter` ABC in `messengers/base.ts`
 - [x] Move storage to `storage/postgres.ts`
 - [x] Create `main.ts` entry point
-- [ ] Verify bot still works after refactor (`pnpm install && pnpm db:migrate && pnpm dev`)
+- [x] Verify bot still works after refactor (`pnpm install && pnpm db:migrate && pnpm dev`)
 
 ### 1.2 Intent Parser
 
@@ -90,7 +90,7 @@ State machine for trade confirmations.
 
 ### 2.1 Provider Interface
 
-- [ ] Define `Provider` ABC in `providers/base.py`:
+- [x] Define `Provider` ABC in `providers/base.ts`:
   - `connect(credentials) -> bool`
   - `get_balance() -> list[Balance]`
   - `get_price(symbol) -> Decimal`
@@ -98,33 +98,53 @@ State machine for trade confirmations.
   - `limit_order(symbol, side, amount, price) -> Order`
   - `cancel_order(order_id) -> bool`
   - `get_orders() -> list[Order]`
-- [ ] Define shared types: `Order`, `Balance`, `Position`
-- [ ] Auto-discovery: scan `providers/` for Provider subclasses
+- [x] Define shared types: `Order`, `Balance`, `Position`
+- [x] Auto-discovery: scan `providers/` for Provider subclasses
 
 ### 2.2 OKX Provider (via ccxt)
 
-- [ ] Implement `providers/okx.py`
-- [ ] Market orders, limit orders
-- [ ] Balance retrieval, portfolio
-- [ ] Price fetching
-- [ ] Add `ccxt` to requirements
+Provider structure:
+```
+src/providers/
+├── exchanges/
+│   ├── okx/
+│   │   ├── provider.ts    # implements BaseProvider
+│   │   └── SKILL.md       # LLM instructions for this exchange
+│   ├── binance/
+│   └── bybit/
+├── brokers/
+│   ├── alpaca/
+│   └── tinkoff/
+└── defi/
+    ├── uniswap/
+    └── jupiter/
+```
+
+- [x] Implement `providers/exchanges/okx/provider.ts` + `SKILL.md`
+- [x] Market orders, limit orders
+- [x] Balance retrieval, portfolio
+- [x] Price fetching
+- [x] Add `ccxt` to dependencies
 
 ### 2.3 Key Management
 
-- [ ] AES-256 encryption for API keys with user master password
-- [ ] DB table `user_credentials` (user_id, provider, encrypted_key, encrypted_secret)
-- [ ] Keys decrypted only at execution time, never sent to LLM
-- [ ] `/connect okx` command flow: request key + secret in DM -> encrypt -> store
-- [ ] `/disconnect okx` to remove credentials
+- [x] AES-256 encryption for API keys with user master password
+- [x] DB table `user_credentials` (user_id, provider, encrypted_key, encrypted_secret)
+- [x] Keys decrypted only at execution time, never sent to LLM
+- [x] CLI: `opentrade connect okx` → prompts for key + secret in terminal → encrypts → stores in DB
+- [x] CLI: `opentrade disconnect okx` → removes credentials from DB
+- [x] CLI: `opentrade connections` → lists connected exchanges
+- [x] CLI: `opentrade test okx` → verifies connection
+- [x] Keys never pass through Telegram — setup is terminal-only
 
 ### 2.4 Core Trading Commands
 
-- [ ] `"show portfolio"` -> aggregated balance with prices
-- [ ] `"buy BTC for $500"` -> confirmation card -> market order
-- [ ] `"sell half my ETH"` -> calculate 50% -> confirmation -> execute
-- [ ] `"limit order SOL at $150"` -> limit order
-- [ ] `"my open orders"` -> list
-- [ ] `"cancel order #123"` -> cancel
+- [x] `"show portfolio"` -> aggregated balance with prices
+- [x] `"buy BTC for $500"` -> confirmation card -> market order
+- [x] `"sell half my ETH"` -> calculate 50% -> confirmation -> execute
+- [x] `"limit order SOL at $150"` -> limit order
+- [x] `"my open orders"` -> list
+- [x] `"cancel order #123"` -> cancel
 
 ---
 
@@ -208,7 +228,7 @@ State machine for trade confirmations.
    [Messenger] -> text -> [Intent Parser] -> JSON -> [Confirmation] -> confirmed -> [Engine] -> [Provider]
    ```
    Each layer knows nothing about adjacent layers' internals.
-5. **Plugin interface is simple** — one file = one provider. Community must be able to add exchanges.
+5. **One folder per provider** — `src/providers/{exchanges,brokers,defi}/<name>/` with `provider.ts` + `SKILL.md`. Community contributes via PR to the main repository.
 
 ---
 

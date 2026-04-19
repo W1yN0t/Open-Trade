@@ -1,16 +1,51 @@
+import { PrismaClient } from '@prisma/client';
 import { TelegramAdapter } from './messengers/telegram.ts';
 import { PostgresStorage } from './storage/postgres.ts';
 import { chat } from './core/chat.ts';
-import { parseIntent, isTradeIntent, formatClarification } from './core/intent_parser.ts';
+import { parseIntent, isTradeIntent, formatClarification, READ_ONLY_ACTIONS } from './core/intent_parser.ts';
 import {
   ConfirmationService,
   formatConfirmationCard,
   getConfirmationLevel,
 } from './core/confirmation.ts';
+import { CredentialService } from './core/credentials.ts';
+import { Engine } from './core/engine.ts';
+import { discoverProviders } from './providers/registry.ts';
+import { Config } from './config.ts';
 
+const prisma = new PrismaClient();
 const storage = new PostgresStorage();
 const telegram = new TelegramAdapter();
 const confirmationService = new ConfirmationService();
+const credentialService = new CredentialService(prisma);
+
+const providerRegistry = await discoverProviders();
+const engine = new Engine(credentialService, providerRegistry, Config.credentials.masterPassword);
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+async function runTrade(
+  confirmation: { id: string; intent: import('./core/intent_parser.ts').TradeIntent },
+  userId: string,
+  chatId: string,
+  messageId: string,
+  edit: boolean,
+): Promise<void> {
+  const send = edit
+    ? (text: string) => telegram.editMessage(chatId, messageId, text)
+    : (text: string) => telegram.sendMessage({ chatId, text }).then(() => {});
+
+  await send('⏳ Executing...');
+  try {
+    const result = await engine.execute(confirmation.intent, userId);
+    await storage.updateConfirmation(confirmation.id, { state: 'DONE' });
+    await send(result);
+  } catch (err) {
+    await storage.updateConfirmation(confirmation.id, { state: 'FAILED' });
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    await send(`❌ Trade failed: ${msg}`);
+  }
+}
 
 // ── Message handler ───────────────────────────────────────────────────────────
 
@@ -39,7 +74,8 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
         return;
       }
 
-      await telegram.sendMessage({ chatId: msg.chatId, text: '✅ Trade confirmed. Executing... (Phase 2)' });
+      // Large order confirmed — execute
+      await runTrade(active, msg.userId, msg.chatId, msg.messageId, false);
       return;
     }
 
@@ -60,6 +96,18 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
 
     if (!isTradeIntent(intent) || intent.confidence < 0.8) {
       await telegram.sendMessage({ chatId: msg.chatId, text: formatClarification(intent) });
+      return;
+    }
+
+    // Read-only actions: execute immediately, no confirmation needed
+    if (READ_ONLY_ACTIONS.has(intent.action as never)) {
+      try {
+        const result = await engine.execute(intent, msg.userId);
+        await telegram.sendMessage({ chatId: msg.chatId, text: result });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Unknown error';
+        await telegram.sendMessage({ chatId: msg.chatId, text: `❌ ${errMsg}` });
+      }
       return;
     }
 
@@ -98,17 +146,20 @@ const callbackHandler = async (userId: string, chatId: string, messageId: string
         return;
       }
 
-      // Normal trade confirmed
-      await telegram.editMessage(chatId, messageId, '✅ Trade confirmed. Executing... (Phase 2)');
+      // Normal trade confirmed — execute
+      await runTrade(confirmation, userId, chatId, messageId, true);
       return;
     }
 
     if (data.startsWith('reconfirm:')) {
       const id = data.slice(10);
       const { action } = await confirmationService.handleReconfirmButton(id, storage);
-      if (action === 'confirmed') {
-        await telegram.editMessage(chatId, messageId, '✅ Trade confirmed. Executing... (Phase 2)');
-      }
+      if (action !== 'confirmed') return;
+
+      const confirmation = await storage.getConfirmationById(id);
+      if (!confirmation) return;
+
+      await runTrade(confirmation, userId, chatId, messageId, true);
       return;
     }
 
@@ -144,6 +195,7 @@ process.on('SIGINT', async () => {
   clearInterval(expiryInterval);
   await telegram.stop();
   await storage.disconnect();
+  await prisma.$disconnect();
   process.exit(0);
 });
 
