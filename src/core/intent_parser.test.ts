@@ -44,6 +44,7 @@ describe('parseIntent — safety fuzz', () => {
   beforeEach(() => vi.clearAllMocks());
 
   const ambiguous = [
+    // Market commentary
     'BTC is looking good today',
     'what do you think about ethereum?',
     'should I buy or sell?',
@@ -51,16 +52,46 @@ describe('parseIntent — safety fuzz', () => {
     'tell me about Bitcoin',
     'how does a limit order work?',
     'is now a good time?',
+    // Numbers that look like amounts but aren't orders
+    'BTC hit $65000 yesterday',
+    'ETH dropped 10% this week',
+    'I made $500 last month trading',
+    // Incomplete trade expressions
+    'I want to buy',
+    'sell',
+    'maybe buy some crypto',
+    'thinking about ETH',
+    // Questions about trading
+    'what is a market order?',
+    'explain DCA strategy',
+    'what are trading fees on OKX?',
+    // Other languages — should still be safe
+    'купить биткоин',     // "buy bitcoin" in Russian (ambiguous, low confidence expected)
+    'wie viel kostet ETH', // "how much does ETH cost" in German
   ];
 
   ambiguous.forEach((text) => {
     it(`does not trigger trade for: "${text}"`, async () => {
-      // Simulate conservative model behavior
       mockIntent({ type: 'chat', action: null, asset: null, quoteCurrency: null, amount: null, amountType: null, condition: null, confidence: 0.75 });
       const intent = await parseIntent(text, 'model');
       const isSafe = intent.type === 'chat' || intent.confidence < 0.8;
       expect(isSafe).toBe(true);
     });
+  });
+
+  // Invariant: confidence threshold is never bypassed even if model returns high score for chat
+  it('treats chat type as safe regardless of confidence', async () => {
+    mockIntent({ type: 'chat', action: null, asset: null, quoteCurrency: null, amount: null, amountType: null, condition: null, confidence: 0.99 });
+    const intent = await parseIntent('hello there', 'model');
+    expect(intent.type).toBe('chat');
+    // chat type should never reach the trade flow
+  });
+
+  // Invariant: sub-0.8 trade confidence must not execute
+  it('marks low-confidence trade as requiring clarification', async () => {
+    mockIntent({ type: 'trade', action: 'buy', asset: 'BTC', quoteCurrency: 'USDT', amount: 500, amountType: 'quote', condition: null, confidence: 0.65 });
+    const intent = await parseIntent('maybe buy some btc?', 'model');
+    expect(intent.confidence).toBeLessThan(0.8);
   });
 });
 

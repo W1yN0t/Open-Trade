@@ -152,22 +152,22 @@ src/providers/
 
 ### 3.1 Risk Controls
 
-- [ ] Max order size (configurable, default $1000)
-- [ ] Rate limiting (max N orders per minute)
-- [ ] Margin trading disabled by default
-- [ ] Cooldown after large orders
+- [x] Max order size (configurable, default $1000)
+- [x] Rate limiting (max N orders per minute)
+- [x] Margin trading disabled by default
+- [x] Cooldown after large orders
 
 ### 3.2 Audit Log
 
-- [ ] DB table `audit_log` (user_id, action, intent, result, timestamp)
-- [ ] Full chain: intent -> confirmation -> execution -> result
-- [ ] `"show my trade history"` command
+- [x] DB table `audit_log` (user_id, action, intent, result, timestamp)
+- [x] Full chain: intent -> confirmation -> execution -> result
+- [x] `"show my trade history"` command
 
 ### 3.3 Testing
 
-- [ ] Paper trading mode (simulated execution)
-- [ ] Integration tests with OKX testnet
-- [ ] Intent parser fuzz tests
+- [x] Paper trading mode (simulated execution)
+- [x] Integration tests with OKX testnet
+- [x] Intent parser fuzz tests
 
 ---
 

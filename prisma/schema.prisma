@@ -39,6 +39,18 @@ model PendingConfirmation {
   @@index([expiresAt, state])
 }
 
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  action     String
+  intent     Json
+  result     String
+  status     String   // success | failed | cancelled | expired
+  executedAt DateTime @default(now())
+
+  @@index([userId, executedAt])
+}
+
 model UserCredentials {
   id                String   @id @default(cuid())
   userId            String

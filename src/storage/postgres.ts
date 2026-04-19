@@ -100,6 +100,42 @@ export class PostgresStorage {
     return stale.map((r: object) => this.toConfirmation(r));
   }
 
+  // ── Audit log ─────────────────────────────────────────────────────────────
+
+  async logTrade(data: {
+    userId: string;
+    action: string;
+    intent: TradeIntent;
+    result: string;
+    status: 'success' | 'failed' | 'cancelled' | 'expired';
+  }): Promise<void> {
+    await this.prisma.auditLog.create({
+      data: {
+        userId: data.userId,
+        action: data.action,
+        intent: data.intent as object,
+        result: data.result,
+        status: data.status,
+      },
+    });
+  }
+
+  async getTradeHistory(userId: string, limit = 10): Promise<Array<{
+    id: string;
+    action: string;
+    intent: TradeIntent;
+    result: string;
+    status: string;
+    executedAt: Date;
+  }>> {
+    const rows = await this.prisma.auditLog.findMany({
+      where: { userId },
+      orderBy: { executedAt: 'desc' },
+      take: limit,
+    });
+    return rows.map((r: any) => ({ ...r, intent: r.intent as TradeIntent }));
+  }
+
   // ── Misc ──────────────────────────────────────────────────────────────────
 
   async disconnect(): Promise<void> {

@@ -13,7 +13,7 @@ export const IntentSchema = z.object({
   type: z.enum(['trade', 'chat']),
   confidence: z.number().min(0).max(1).describe('Confidence score for the classification'),
   action: z
-    .enum(['buy', 'sell', 'swap', 'limit', 'stop', 'portfolio', 'balance', 'price', 'orders', 'cancel'])
+    .enum(['buy', 'sell', 'swap', 'limit', 'stop', 'portfolio', 'balance', 'price', 'orders', 'cancel', 'history'])
     .nullable()
     .describe('Trade action type, null for chat'),
   asset: z.string().nullable().describe('Asset symbol e.g. BTC, ETH, SOL. Null for chat'),
@@ -37,7 +37,7 @@ export interface TradeIntent extends RawIntent {
   quoteCurrency: NonNullable<RawIntent['quoteCurrency']>;
 }
 
-export const READ_ONLY_ACTIONS = new Set(['portfolio', 'balance', 'price', 'orders'] as const);
+export const READ_ONLY_ACTIONS = new Set(['portfolio', 'balance', 'price', 'orders', 'history'] as const);
 
 export interface ChatIntent extends RawIntent {
   type: 'chat';

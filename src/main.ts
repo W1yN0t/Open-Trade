@@ -20,7 +20,11 @@ const confirmationService = new ConfirmationService();
 const credentialService = new CredentialService(prisma);
 
 const providerRegistry = await discoverProviders();
-const engine = new Engine(credentialService, providerRegistry, Config.credentials.masterPassword);
+const engine = new Engine(credentialService, providerRegistry, Config.credentials.masterPassword, { paperMode: Config.paper.enabled });
+
+if (Config.paper.enabled) {
+  console.log('⚠️  PAPER TRADING MODE — no real orders will be placed');
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -39,10 +43,12 @@ async function runTrade(
   try {
     const result = await engine.execute(confirmation.intent, userId);
     await storage.updateConfirmation(confirmation.id, { state: 'DONE' });
+    await storage.logTrade({ userId, action: confirmation.intent.action, intent: confirmation.intent, result, status: 'success' });
     await send(result);
   } catch (err) {
     await storage.updateConfirmation(confirmation.id, { state: 'FAILED' });
     const msg = err instanceof Error ? err.message : 'Unknown error';
+    await storage.logTrade({ userId, action: confirmation.intent.action, intent: confirmation.intent, result: msg, status: 'failed' });
     await send(`❌ Trade failed: ${msg}`);
   }
 }
@@ -96,6 +102,24 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
 
     if (!isTradeIntent(intent) || intent.confidence < 0.8) {
       await telegram.sendMessage({ chatId: msg.chatId, text: formatClarification(intent) });
+      return;
+    }
+
+    // Trade history: served from DB, not from exchange
+    if (intent.action === 'history') {
+      const rows = await storage.getTradeHistory(msg.userId);
+      if (rows.length === 0) {
+        await telegram.sendMessage({ chatId: msg.chatId, text: '📋 No trades yet.' });
+      } else {
+        const lines = ['📋 Trade History\n'];
+        for (const r of rows) {
+          const date = r.executedAt.toISOString().slice(0, 16).replace('T', ' ');
+          const icon = r.status === 'success' ? '✅' : '❌';
+          const summary = `${r.intent.action?.toUpperCase()} ${r.intent.asset ?? ''}${r.intent.amount ? ` ${r.intent.amount}` : ''}`.trim();
+          lines.push(`${icon} ${date} — ${summary}`);
+        }
+        await telegram.sendMessage({ chatId: msg.chatId, text: lines.join('\n') });
+      }
       return;
     }
 
@@ -167,6 +191,10 @@ const callbackHandler = async (userId: string, chatId: string, messageId: string
       const id = data.slice(7);
       const cancelled = await confirmationService.handleCancelButton(id, storage);
       if (cancelled) {
+        const confirmation = await storage.getConfirmationById(id);
+        if (confirmation) {
+          await storage.logTrade({ userId, action: confirmation.intent.action, intent: confirmation.intent, result: 'Cancelled by user', status: 'cancelled' });
+        }
         await telegram.editMessage(chatId, messageId, '❌ Trade cancelled.');
       }
     }
@@ -180,6 +208,7 @@ const callbackHandler = async (userId: string, chatId: string, messageId: string
 const expiryInterval = setInterval(async () => {
   const expired = await confirmationService.expireStale(storage);
   for (const c of expired) {
+    await storage.logTrade({ userId: c.userId, action: c.intent.action, intent: c.intent, result: 'Confirmation expired', status: 'expired' }).catch(() => {});
     if (!c.messageId) continue;
     try {
       await telegram.editMessage(c.chatId, c.messageId, '⏰ Confirmation expired.');

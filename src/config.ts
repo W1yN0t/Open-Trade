@@ -10,6 +10,9 @@ export const Config = {
   credentials: {
     masterPassword: process.env.MASTER_PASSWORD ?? '',
   },
+  paper: {
+    enabled: process.env.PAPER_TRADING === 'true',
+  },
   llm: {
     apiKey: process.env.LLM_API_KEY!,
     model: process.env.LLM_MODEL ?? 'anthropic/claude-3-5-sonnet',
