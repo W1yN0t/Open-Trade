@@ -136,7 +136,7 @@ export class Engine {
     let amount = intent.amount ?? 0;
 
     if (intent.amountType === 'quote') {
-      const p = await provider.getPrice(symbol);
+      const p = intent.limitPrice ?? await provider.getPrice(symbol);
       if (p === 0) throw new Error(`Cannot fetch price for ${symbol}`);
       amount = amount / p;
     }
@@ -156,7 +156,11 @@ export class Engine {
     const symbol = `${intent.asset}/${intent.quoteCurrency}`;
     let amount = intent.amount ?? 0;
 
-    if (intent.amountType === 'percent') {
+    if (intent.amountType === 'quote') {
+      const p = intent.limitPrice ?? await provider.getPrice(symbol);
+      if (p === 0) throw new Error(`Cannot fetch price for ${symbol}`);
+      amount = amount / p;
+    } else if (intent.amountType === 'percent') {
       const balances = await provider.getBalance();
       const b = balances.find(bal => bal.asset === intent.asset);
       if (!b || b.free === 0) throw new Error(`No free ${intent.asset} to sell`);
@@ -179,7 +183,11 @@ export class Engine {
     if (!intent.amount) throw new Error('Amount not specified. Example: "buy 0.1 BTC at $60000"');
 
     const symbol = `${intent.asset}/${intent.quoteCurrency}`;
-    const order = await provider.limitOrder(symbol, 'buy', intent.amount, intent.limitPrice);
+    // Convert quote amount ($100 at $10000) → base units (0.01 BTC)
+    const baseAmount = intent.amountType === 'quote'
+      ? intent.amount / intent.limitPrice
+      : intent.amount;
+    const order = await provider.limitOrder(symbol, 'buy', baseAmount, intent.limitPrice);
     this.risk.recordOrder(userId, await this.estimateUsd(provider, intent));
     return `${paper}✅ Limit order placed\n${order.amount} ${intent.asset} @ $${intent.limitPrice.toLocaleString()}\nOrder ID: ${order.id} — ${order.status}`;
   }

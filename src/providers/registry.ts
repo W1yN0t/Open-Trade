@@ -1,5 +1,5 @@
 import { readdirSync, statSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Provider } from './base.ts';
 
@@ -24,7 +24,7 @@ export async function discoverProviders(): Promise<Map<string, typeof Provider>>
 
   await Promise.all(
     files.map(async (file) => {
-      const mod = await import(file);
+      const mod = await import(pathToFileURL(file).href);
       for (const exported of Object.values(mod)) {
         if (typeof exported === 'function' && exported.prototype instanceof Provider) {
           const ProviderClass = exported as typeof Provider;

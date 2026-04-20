@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import type { StoredConfirmation, ConfirmationState, ConfirmationSubState } from '../core/confirmation.ts';
 import type { TradeIntent } from '../core/intent_parser.ts';
+import { Config } from '../config.ts';
 
 export type MessageRole = 'user' | 'assistant' | 'system';
 
@@ -31,7 +32,7 @@ export class PostgresStorage {
 
   async getUserModel(userId: string): Promise<string> {
     const settings = await this.prisma.userSettings.findUnique({ where: { userId } });
-    return settings?.model ?? 'anthropic/claude-3-5-sonnet';
+    return settings?.model ?? Config.llm.model;
   }
 
   async setUserModel(userId: string, model: string): Promise<void> {

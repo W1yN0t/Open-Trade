@@ -58,7 +58,15 @@ CHAT: general questions, greetings, market analysis requests, news, explanations
 CRITICAL SAFETY RULE: Only classify as "trade" if confidence >= 0.8. When in doubt → "chat".
 Never trigger a trade on ambiguous input. A wrong trade costs real money.
 
-For trade intents: extract all parameters you can determine from the message.
+AMOUNT EXTRACTION RULES (very important):
+- "amount" is HOW MUCH the user wants to spend or trade, NOT the price.
+- "limitPrice" is the TARGET PRICE at which the order should execute.
+- These are always two separate fields — never mix them.
+- If the message contains a spend amount in USD/USDT (e.g. "for $100", "на $100", "worth $100", "на 100$"), set amount=100 and amountType="quote".
+- If the message contains an asset quantity (e.g. "0.5 BTC", "10 ETH"), set amount=0.5 and amountType="base".
+- If BOTH are present (e.g. "buy 0.5 BTC at $10000 for $100"), prefer the spend amount: amount=100, amountType="quote", limitPrice=10000.
+- Phrases like "по цене", "at price", "at $X", "по $X" always indicate limitPrice, never amount.
+
 Default quoteCurrency to "USDT" if not specified.`;
 
 export async function parseIntent(text: string, model: string): Promise<Intent> {

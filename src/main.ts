@@ -100,13 +100,8 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
       return;
     }
 
-    if (!isTradeIntent(intent) || intent.confidence < 0.8) {
-      await telegram.sendMessage({ chatId: msg.chatId, text: formatClarification(intent) });
-      return;
-    }
-
-    // Trade history: served from DB, not from exchange
-    if (intent.action === 'history') {
+    // Read-only and history actions don't need asset/quoteCurrency — check before isTradeIntent
+    if (intent.action === 'history' && intent.confidence >= 0.8) {
       const rows = await storage.getTradeHistory(msg.userId);
       if (rows.length === 0) {
         await telegram.sendMessage({ chatId: msg.chatId, text: '📋 No trades yet.' });
@@ -124,7 +119,7 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
     }
 
     // Read-only actions: execute immediately, no confirmation needed
-    if (READ_ONLY_ACTIONS.has(intent.action as never)) {
+    if (intent.action !== null && READ_ONLY_ACTIONS.has(intent.action as never) && intent.confidence >= 0.8) {
       try {
         const result = await engine.execute(intent, msg.userId);
         await telegram.sendMessage({ chatId: msg.chatId, text: result });
@@ -132,6 +127,11 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
         const errMsg = err instanceof Error ? err.message : 'Unknown error';
         await telegram.sendMessage({ chatId: msg.chatId, text: `❌ ${errMsg}` });
       }
+      return;
+    }
+
+    if (!isTradeIntent(intent) || intent.confidence < 0.8) {
+      await telegram.sendMessage({ chatId: msg.chatId, text: formatClarification(intent) });
       return;
     }
 

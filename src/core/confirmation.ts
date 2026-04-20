@@ -48,6 +48,10 @@ export function formatConfirmationCard(intent: TradeIntent, level: ConfirmationL
     lines.push(`Amount: ${unit}`);
   }
 
+  if (intent.limitPrice !== null) {
+    lines.push(`Limit Price: $${intent.limitPrice.toLocaleString()}`);
+  }
+
   if (intent.condition) lines.push(`Condition: ${intent.condition}`);
 
   lines.push('');
