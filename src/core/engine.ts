@@ -8,6 +8,7 @@ const STABLECOINS = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'FDUSD', 'TUSD']);
 const TRADE_ACTIONS = new Set(['buy', 'sell', 'swap', 'limit', 'stop']);
 
 export class Engine {
+  // key: `${userId}:${providerName}` to support multiple exchanges per user
   private cache = new Map<string, Provider>();
   private risk = new RiskManager();
   private paperProvider: PaperProvider | null = null;
@@ -31,7 +32,10 @@ export class Engine {
 
     switch (intent.action) {
       case 'portfolio':
-      case 'balance':  return this.portfolio(provider, paper);
+      case 'balance': {
+        const all = await this.getAllProviders(userId);
+        return this.portfolio(all, paper);
+      }
       case 'price':    return this.price(provider, intent);
       case 'orders':   return this.openOrders(provider, paper);
       case 'buy':
@@ -63,15 +67,33 @@ export class Engine {
       return this.paperProvider;
     }
 
-    const cached = this.cache.get(userId);
-    if (cached) return cached;
+    const names = await this.credentialService.list(userId);
+    if (names.length === 0) {
+      throw new Error('No exchange connected. Run: pnpm cli connect <exchange>');
+    }
+
+    return this.loadProvider(userId, names[0]);
+  }
+
+  private async getAllProviders(userId: string): Promise<Provider[]> {
+    if (this.options.paperMode) {
+      if (!this.paperProvider) this.paperProvider = new PaperProvider();
+      return [this.paperProvider];
+    }
 
     const names = await this.credentialService.list(userId);
     if (names.length === 0) {
       throw new Error('No exchange connected. Run: pnpm cli connect <exchange>');
     }
 
-    const name = names[0];
+    return Promise.all(names.map(name => this.loadProvider(userId, name)));
+  }
+
+  private async loadProvider(userId: string, name: string): Promise<Provider> {
+    const cacheKey = `${userId}:${name}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached) return cached;
+
     const ProviderClass = this.providerRegistry.get(name);
     if (!ProviderClass) throw new Error(`Provider "${name}" is not installed`);
 
@@ -80,35 +102,46 @@ export class Engine {
     const ok = await provider.connect(credentials);
     if (!ok) throw new Error(`Could not connect to ${name}. Check your API keys with: pnpm cli test ${name}`);
 
-    this.cache.set(userId, provider);
+    this.cache.set(cacheKey, provider);
     return provider;
   }
 
-  private async portfolio(provider: Provider, paper = ''): Promise<string> {
-    const balances = await provider.getBalance();
-    if (balances.length === 0) return `${paper}💼 Your portfolio is empty.`;
-
+  private async portfolio(providers: Provider[], paper = ''): Promise<string> {
+    const multiExchange = providers.length > 1;
     let totalUsd = 0;
-    const lines: string[] = [`${paper}💼 Portfolio\n`];
+    const sections: string[] = [];
 
-    for (const b of balances) {
-      if (STABLECOINS.has(b.asset)) {
-        totalUsd += b.total;
-        lines.push(`${b.asset}: ${b.total.toFixed(2)}`);
-      } else {
-        try {
-          const p = await provider.getPrice(`${b.asset}/USDT`);
-          const usd = b.total * p;
-          totalUsd += usd;
-          lines.push(`${b.asset}: ${b.total} (~$${usd.toFixed(2)} @ $${p.toLocaleString()})`);
-        } catch {
-          lines.push(`${b.asset}: ${b.total}`);
+    for (const provider of providers) {
+      const balances = await provider.getBalance();
+      if (balances.length === 0) continue;
+
+      const lines: string[] = [];
+      if (multiExchange) lines.push(`🏦 ${provider.name.toUpperCase()}`);
+
+      for (const b of balances) {
+        if (STABLECOINS.has(b.asset)) {
+          totalUsd += b.total;
+          lines.push(`${b.asset}: ${b.total.toFixed(2)}`);
+        } else {
+          try {
+            const p = await provider.getPrice(`${b.asset}/USDT`);
+            const usd = b.total * p;
+            totalUsd += usd;
+            lines.push(`${b.asset}: ${b.total} (~$${usd.toFixed(2)} @ $${p.toLocaleString()})`);
+          } catch {
+            lines.push(`${b.asset}: ${b.total}`);
+          }
         }
       }
+
+      sections.push(lines.join('\n'));
     }
 
-    lines.push(`\n💰 Total: ~$${totalUsd.toFixed(2)}`);
-    return lines.join('\n');
+    if (sections.length === 0) return `${paper}💼 Your portfolio is empty.`;
+
+    const header = `${paper}💼 Portfolio\n`;
+    const body = sections.join('\n\n');
+    return `${header}\n${body}\n\n💰 Total: ~$${totalUsd.toFixed(2)}`;
   }
 
   private async price(provider: Provider, intent: TradeIntent): Promise<string> {

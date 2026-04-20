@@ -27,6 +27,7 @@ function intent(overrides: Partial<TradeIntent>): TradeIntent {
     amountType: 'quote',
     limitPrice: null,
     orderId: null,
+    side: null,
     condition: null,
     confidence: 0.95,
     ...overrides,

@@ -97,19 +97,19 @@ describe('parseIntent — safety fuzz', () => {
 
 describe('isTradeIntent', () => {
   it('returns true for valid trade intent', () => {
-    const intent = { type: 'trade' as const, action: 'buy' as const, asset: 'BTC', quoteCurrency: 'USDT', amount: 500, amountType: 'quote' as const, condition: null, limitPrice: null, orderId: null, confidence: 0.95 };
+    const intent = { type: 'trade' as const, action: 'buy' as const, asset: 'BTC', quoteCurrency: 'USDT', amount: 500, amountType: 'quote' as const, side: null, condition: null, limitPrice: null, orderId: null, confidence: 0.95 };
     expect(isTradeIntent(intent)).toBe(true);
   });
 
   it('returns false when asset is null', () => {
-    const intent = { type: 'trade' as const, action: 'buy' as const, asset: null, quoteCurrency: null, amount: null, amountType: null, condition: null, limitPrice: null, orderId: null, confidence: 0.6 };
+    const intent = { type: 'trade' as const, action: 'buy' as const, asset: null, quoteCurrency: null, amount: null, amountType: null, side: null, condition: null, limitPrice: null, orderId: null, confidence: 0.6 };
     expect(isTradeIntent(intent)).toBe(false);
   });
 });
 
 describe('formatConfirmationCard', () => {
   it('includes action, asset and amount', () => {
-    const intent = { type: 'trade' as const, action: 'buy' as const, asset: 'BTC', quoteCurrency: 'USDT', amount: 500, amountType: 'quote' as const, condition: null, limitPrice: null, orderId: null, confidence: 0.95 };
+    const intent = { type: 'trade' as const, action: 'buy' as const, asset: 'BTC', quoteCurrency: 'USDT', amount: 500, amountType: 'quote' as const, side: null, condition: null, limitPrice: null, orderId: null, confidence: 0.95 };
     const card = formatConfirmationCard(intent, getConfirmationLevel(intent));
     expect(card).toContain('BUY');
     expect(card).toContain('BTC');
@@ -117,7 +117,7 @@ describe('formatConfirmationCard', () => {
   });
 
   it('includes condition when present', () => {
-    const intent2 = { type: 'trade' as const, action: 'limit' as const, asset: 'SOL', quoteCurrency: 'USDT', amount: 10, amountType: 'base' as const, condition: 'when price drops to $140', limitPrice: 140, orderId: null, confidence: 0.9 };
+    const intent2 = { type: 'trade' as const, action: 'limit' as const, asset: 'SOL', quoteCurrency: 'USDT', amount: 10, amountType: 'base' as const, side: null, condition: 'when price drops to $140', limitPrice: 140, orderId: null, confidence: 0.9 };
     const card = formatConfirmationCard(intent2, getConfirmationLevel(intent2));
     expect(card).toContain('when price drops to $140');
   });
@@ -125,7 +125,7 @@ describe('formatConfirmationCard', () => {
 
 describe('formatClarification', () => {
   it('mentions the detected action and asset', () => {
-    const text = formatClarification({ type: 'trade', action: 'sell', asset: 'ETH', quoteCurrency: 'USDT', amount: null, amountType: null, condition: null, limitPrice: null, orderId: null, confidence: 0.6 });
+    const text = formatClarification({ type: 'trade', action: 'sell', asset: 'ETH', quoteCurrency: 'USDT', amount: null, amountType: null, side: null, condition: null, limitPrice: null, orderId: null, confidence: 0.6 });
     expect(text).toContain('sell');
     expect(text).toContain('ETH');
   });

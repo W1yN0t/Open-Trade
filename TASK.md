@@ -173,11 +173,11 @@ src/providers/
 
 ## Phase 4 — Multi-Exchange
 
-- [ ] Bybit provider
-- [ ] OKX provider
-- [ ] Kraken provider
-- [ ] Cross-exchange portfolio view
-- [ ] Per-exchange `/connect` flow
+- [x] Binance provider
+- [x] Bybit provider
+- [x] OKX provider
+- [x] Cross-exchange portfolio view
+- [x] Per-exchange `/connect` flow — CLI-only (`pnpm cli connect <exchange>`), keys never pass through Telegram
 
 ---
 
