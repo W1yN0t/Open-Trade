@@ -62,6 +62,14 @@ export class OkxProvider extends Provider {
   }
 
   async cancelOrder(orderId: string): Promise<boolean> {
+    if (!this.orderSymbols.has(orderId)) {
+      try {
+        const raw = await this.ex().fetchOpenOrders();
+        raw.forEach((o: CcxtOrder) => this.mapOrder(o));
+      } catch {
+        return false;
+      }
+    }
     const symbol = this.orderSymbols.get(orderId);
     if (!symbol) return false;
     try {

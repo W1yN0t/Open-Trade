@@ -25,6 +25,7 @@ export const IntentSchema = z.object({
     .describe('quote=in USD/USDT, base=in asset units, percent=% of holdings'),
   limitPrice: z.number().nullable().describe('Limit/stop price for limit and stop orders'),
   orderId: z.string().nullable().describe('Order ID for cancel operations'),
+  side: z.enum(['buy', 'sell']).nullable().describe('Trade side: buy or sell. For action=limit/stop derive from context.'),
   condition: z.string().nullable().describe('Conditional trigger e.g. "when price drops to 150"'),
 });
 
@@ -57,6 +58,12 @@ CHAT: general questions, greetings, market analysis requests, news, explanations
 
 CRITICAL SAFETY RULE: Only classify as "trade" if confidence >= 0.8. When in doubt → "chat".
 Never trigger a trade on ambiguous input. A wrong trade costs real money.
+
+SIDE FIELD RULES (very important):
+- Set "side" to "buy" when the user is buying, swapping into, or placing a buy limit order.
+- Set "side" to "sell" when the user is selling, exiting, or placing a sell limit order.
+- For action="limit" or action="stop", always infer side from context ("buy X at $Y" → buy, "sell X at $Y" → sell).
+- Never leave side null for trade intents.
 
 AMOUNT EXTRACTION RULES (very important):
 - "amount" is HOW MUCH the user wants to spend or trade, NOT the price.

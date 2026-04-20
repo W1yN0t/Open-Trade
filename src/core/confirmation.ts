@@ -23,10 +23,12 @@ export interface StoredConfirmation {
   expiresAt: Date;
 }
 
-export function getConfirmationLevel(intent: TradeIntent): ConfirmationLevel {
+export function getConfirmationLevel(intent: TradeIntent, estimatedUsd = 0): ConfirmationLevel {
   if (intent.amountType === 'percent' && (intent.amount ?? 0) >= 100) return 'critical';
   if (intent.amountType === 'quote' && (intent.amount ?? 0) > 5000) return 'critical';
   if (intent.amountType === 'quote' && (intent.amount ?? 0) > 500) return 'large';
+  if (estimatedUsd > 5000) return 'critical';
+  if (estimatedUsd > 500) return 'large';
   return 'normal';
 }
 
@@ -114,7 +116,7 @@ export class ConfirmationService {
     input: string,
     storage: PostgresStorage,
   ): Promise<{ valid: boolean; nextAction: 'confirmed' | 'ask_reconfirm' }> {
-    const normalize = (s: string) => s.trim().replace(/[$,\s]/g, '');
+    const normalize = (s: string) => s.trim().replace(/[$,%\s]/g, '');
 
     if (normalize(input) !== normalize(confirmation.expectedInput ?? '')) {
       await storage.updateConfirmation(confirmation.id, { state: 'CANCELLED', subState: null });

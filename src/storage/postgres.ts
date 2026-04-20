@@ -11,7 +11,7 @@ export interface Message {
 }
 
 export class PostgresStorage {
-  private prisma = new PrismaClient();
+  constructor(private readonly prisma: PrismaClient = new PrismaClient()) {}
 
   // ── Chat history ──────────────────────────────────────────────────────────
 

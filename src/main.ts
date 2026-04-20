@@ -14,7 +14,7 @@ import { discoverProviders } from './providers/registry.ts';
 import { Config } from './config.ts';
 
 const prisma = new PrismaClient();
-const storage = new PostgresStorage();
+const storage = new PostgresStorage(prisma);
 const telegram = new TelegramAdapter();
 const confirmationService = new ConfirmationService();
 const credentialService = new CredentialService(prisma);
@@ -65,6 +65,7 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
 
       if (!valid) {
         await telegram.sendMessage({ chatId: msg.chatId, text: '❌ Amount doesn\'t match. Confirmation cancelled.' });
+        await storage.logTrade({ userId: msg.userId, action: active.intent.action, intent: active.intent, result: 'Invalid amount input — confirmation cancelled', status: 'cancelled' });
         return;
       }
 
@@ -110,7 +111,8 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
         for (const r of rows) {
           const date = r.executedAt.toISOString().slice(0, 16).replace('T', ' ');
           const icon = r.status === 'success' ? '✅' : '❌';
-          const summary = `${r.intent.action?.toUpperCase()} ${r.intent.asset ?? ''}${r.intent.amount ? ` ${r.intent.amount}` : ''}`.trim();
+          const action = r.intent.action?.toUpperCase() ?? 'TRADE';
+          const summary = `${action} ${r.intent.asset ?? ''}${r.intent.amount ? ` ${r.intent.amount}` : ''}`.trim();
           lines.push(`${icon} ${date} — ${summary}`);
         }
         await telegram.sendMessage({ chatId: msg.chatId, text: lines.join('\n') });
@@ -136,8 +138,9 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
     }
 
     // High-confidence trade → create confirmation and show card with buttons
+    const estimatedUsd = await engine.estimateUsdForIntent(intent, msg.userId);
     const confirmation = await confirmationService.create(msg.userId, msg.chatId, intent, storage);
-    const level = getConfirmationLevel(intent);
+    const level = getConfirmationLevel(intent, estimatedUsd);
     const cardText = formatConfirmationCard(intent, level);
 
     const messageId = await telegram.sendWithKeyboard(msg.chatId, cardText, [

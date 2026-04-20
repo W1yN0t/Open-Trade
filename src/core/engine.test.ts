@@ -52,7 +52,7 @@ describe('Engine — normal mode', () => {
   it('executes limit order', async () => {
     const engine = makeEngine();
     const result = await engine.execute(intent({ action: 'limit', amount: 0.001, amountType: 'base', limitPrice: 60000 }), 'user1');
-    expect(result).toContain('Limit order placed');
+    expect(result).toContain('Limit');
     expect(result).toMatch(/60[\s,.]?000/);
   });
 
@@ -76,11 +76,10 @@ describe('Engine — normal mode', () => {
     expect(result).toContain('exceeds the limit');
   });
 
-  it('blocks margin/stop action', async () => {
+  it('blocks stop action as unsupported', async () => {
     const engine = makeEngine();
     const result = await engine.execute(intent({ action: 'stop' }), 'user1');
-    // Risk manager intercepts stop orders before engine switch
-    expect(result).toContain('Margin');
+    expect(result).toContain('not yet supported');
   });
 
   it('throws when no exchange connected', async () => {

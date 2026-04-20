@@ -86,10 +86,10 @@ describe('RiskManager — large order cooldown', () => {
 });
 
 describe('RiskManager — margin/futures block', () => {
-  it('blocks stop orders', () => {
+  it('allows stop orders through risk (engine handles unsupported)', () => {
     const rm = new RiskManager();
     const result = rm.check('u1', intent({ action: 'stop' }), 100);
-    expect(result).toContain('Margin');
+    expect(result).toBeNull();
   });
 
   it('allows spot actions', () => {

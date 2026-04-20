@@ -70,9 +70,8 @@ export class RiskManager {
     }
   }
 
-  private isMarginAction(intent: TradeIntent): boolean {
-    // stop orders are the only margin-adjacent action currently parsed
-    return intent.action === 'stop';
+  private isMarginAction(_intent: TradeIntent): boolean {
+    return false;
   }
 
   private getState(userId: string): UserState {

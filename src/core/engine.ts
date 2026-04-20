@@ -48,6 +48,15 @@ export class Engine {
     return !!this.options.paperMode;
   }
 
+  async estimateUsdForIntent(intent: TradeIntent, userId: string): Promise<number> {
+    try {
+      const provider = await this.getProvider(userId);
+      return this.estimateUsd(provider, intent);
+    } catch {
+      return 0;
+    }
+  }
+
   private async getProvider(userId: string): Promise<Provider> {
     if (this.options.paperMode) {
       if (!this.paperProvider) this.paperProvider = new PaperProvider();
@@ -123,6 +132,13 @@ export class Engine {
     try {
       if (!intent.asset || !intent.quoteCurrency) return 0;
       if (intent.amountType === 'quote') return intent.amount ?? 0;
+      if (intent.amountType === 'percent') {
+        const balances = await provider.getBalance();
+        const b = balances.find(bal => bal.asset === intent.asset);
+        if (!b) return 0;
+        const price = await provider.getPrice(`${intent.asset}/${intent.quoteCurrency}`);
+        return b.free * ((intent.amount ?? 0) / 100) * price;
+      }
       if (intent.limitPrice && intent.amount) return intent.amount * intent.limitPrice;
       const price = await provider.getPrice(`${intent.asset}/${intent.quoteCurrency}`);
       return (intent.amount ?? 0) * price;
@@ -187,9 +203,10 @@ export class Engine {
     const baseAmount = intent.amountType === 'quote'
       ? intent.amount / intent.limitPrice
       : intent.amount;
-    const order = await provider.limitOrder(symbol, 'buy', baseAmount, intent.limitPrice);
+    const side = (intent.side ?? 'buy') as 'buy' | 'sell';
+    const order = await provider.limitOrder(symbol, side, baseAmount, intent.limitPrice);
     this.risk.recordOrder(userId, await this.estimateUsd(provider, intent));
-    return `${paper}✅ Limit order placed\n${order.amount} ${intent.asset} @ $${intent.limitPrice.toLocaleString()}\nOrder ID: ${order.id} — ${order.status}`;
+    return `${paper}✅ Limit ${side} order placed\n${order.amount} ${intent.asset} @ $${intent.limitPrice.toLocaleString()}\nOrder ID: ${order.id} — ${order.status}`;
   }
 
   private async cancelOrder(provider: Provider, intent: TradeIntent): Promise<string> {
