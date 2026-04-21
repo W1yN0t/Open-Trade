@@ -181,7 +181,49 @@ src/providers/
 
 ---
 
-## Phase 5 — DeFi
+## Phase 5 — LLM Provider Flexibility
+
+Expand from OpenRouter-only to a full provider menu: direct cloud APIs (OpenAI, Anthropic, Gemini)
+and local runtimes (Ollama, LM Studio). Vercel AI SDK has first-party packages for all of them,
+so each is a thin adapter on top of the existing `getModel()` factory.
+
+**Direct cloud providers**
+- [x] `LLM_PROVIDER=openai` — use `@ai-sdk/openai` with `OPENAI_API_KEY` directly (no OpenRouter proxy)
+- [x] `LLM_PROVIDER=anthropic` — use `@ai-sdk/anthropic` with `ANTHROPIC_API_KEY` directly
+- [x] `LLM_PROVIDER=gemini` — use `@ai-sdk/google` with `GEMINI_API_KEY` directly
+- [x] Install packages: `@ai-sdk/anthropic`, `@ai-sdk/google` (openai already present)
+- [x] `.env` docs updated: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
+
+**Ollama** ✅
+- [x] Auto-detect running instance: ping `OLLAMA_BASE_URL/api/tags` on startup, warn if unreachable
+- [x] `pnpm cli model pull llama3.2` — trigger `ollama pull` and stream progress to terminal
+- [x] `pnpm cli models` — list locally installed Ollama models with size + quantisation
+
+**LM Studio** ✅
+- [x] Support `LM_STUDIO_BASE_URL` (default `http://localhost:1234/v1`) — LM Studio's built-in server
+- [x] `pnpm cli models --lmstudio` — query `/v1/models` and display loaded model name
+
+**Shared** ✅
+- [x] `LLM_PROVIDER=ollama|lmstudio|openrouter` env flag; fallback chain: local → openrouter if unreachable
+- [x] `pnpm cli model use <name>` — switch active model, persist in DB; smoke-test before activating
+- [x] Intent parser quality guard: run smoke-test suite against new model before activating it
+- [x] `.env` docs updated: `LLM_PROVIDER`, `OLLAMA_BASE_URL`, `LM_STUDIO_BASE_URL`
+
+---
+
+## Phase 6 — CLI Configuration UX
+
+- [ ] `pnpm cli config` — interactive wizard: exchange keys, LLM provider, risk limits, paper mode
+- [ ] `pnpm cli config set RISK_MAX_ORDER_USD 500` — set any env key without editing `.env` manually
+- [ ] `pnpm cli config show` — pretty-print all active settings with sources (env / DB / default)
+- [ ] `pnpm cli config reset` — restore defaults with confirmation prompt
+- [ ] `pnpm cli status` — one-shot health dashboard: DB ping, exchange connections, active model, paper mode flag
+- [ ] `pnpm cli logs [--tail 50]` — stream or paginate audit log from DB in human-readable format
+- [ ] Shell completions: generate bash/zsh completion script via `pnpm cli completion`
+
+---
+
+## Phase 7 — DeFi
 
 - [ ] Uniswap provider (viem)
 - [ ] Wallet connection (private key or WalletConnect)
@@ -191,7 +233,7 @@ src/providers/
 
 ---
 
-## Phase 6 — Multi-Messenger
+## Phase 8 — Multi-Messenger
 
 - [ ] `MessengerAdapter` ABC (send_message, send_confirmation_card, on_message, on_button)
 - [ ] Discord adapter
@@ -200,7 +242,7 @@ src/providers/
 
 ---
 
-## Phase 7 — Stocks & Traditional Finance
+## Phase 9 — Stocks & Traditional Finance
 
 - [ ] Alpaca provider (free API)
 - [ ] Interactive Brokers provider
@@ -209,7 +251,7 @@ src/providers/
 
 ---
 
-## Phase 8 — Advanced Strategies
+## Phase 10 — Advanced Strategies
 
 - [ ] DCA: `"buy BTC $100 every Monday"`
 - [ ] Price alerts: `"notify when ETH < 2000"`
@@ -240,12 +282,16 @@ Phase 1 (architecture + intent parser)
 Phase 2 (first exchange = MVP)        <-- key milestone
    |                |
 Phase 3 (security)  Phase 4 (multi-exchange)
+   |
+Phase 5 (local models)
+   |
+Phase 6 (CLI config UX)
    |                |
-Phase 5 (DeFi)     Phase 6 (multi-messenger)
+Phase 7 (DeFi)     Phase 8 (multi-messenger)
         |       |
-     Phase 7 (stocks)
+     Phase 9 (stocks)
            |
-     Phase 8 (strategies)
+     Phase 10 (strategies)
 ```
 
-Phase 1 + 2 = usable product. Everything after = expansion.
+Phase 1 + 2 = usable product. Phase 5 + 6 = self-hosted power-user setup. Everything after = expansion.

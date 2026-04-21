@@ -1,13 +1,6 @@
 import { generateObject } from 'ai';
-import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
-import { Config } from '../config.ts';
-
-const openrouter = createOpenAI({
-  baseURL: Config.llm.baseUrl,
-  apiKey: Config.llm.apiKey,
-  compatibility: 'compatible',
-});
+import { getModel } from '../llm/provider.ts';
 
 export const IntentSchema = z.object({
   type: z.enum(['trade', 'chat']),
@@ -50,7 +43,7 @@ export function isTradeIntent(intent: RawIntent): intent is TradeIntent {
   return intent.type === 'trade' && intent.action !== null && intent.asset !== null;
 }
 
-const SYSTEM_PROMPT = `You are a financial intent classifier for a trading bot.
+export const INTENT_SYSTEM_PROMPT = `You are a financial intent classifier for a trading bot.
 Analyze the user's message and classify it as "trade" or "chat".
 
 TRADE: buying/selling assets, price checks, portfolio/balance queries, limit/stop orders, token swaps.
@@ -78,9 +71,9 @@ Default quoteCurrency to "USDT" if not specified.`;
 
 export async function parseIntent(text: string, model: string): Promise<Intent> {
   const { object } = await generateObject({
-    model: openrouter(model),
+    model: getModel(model),
     schema: IntentSchema,
-    system: SYSTEM_PROMPT,
+    system: INTENT_SYSTEM_PROMPT,
     prompt: text,
   });
 

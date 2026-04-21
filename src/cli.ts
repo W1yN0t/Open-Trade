@@ -3,6 +3,7 @@ import * as readline from 'node:readline';
 import { PrismaClient } from '@prisma/client';
 import { CredentialService } from './core/credentials.ts';
 import { discoverProviders } from './providers/registry.ts';
+import { runSmokeTest } from './llm/smoke_test.ts';
 import type { Provider } from './providers/base.ts';
 
 const OPERATOR_ID = process.env.OPERATOR_USER_ID ?? 'operator';
@@ -65,6 +66,116 @@ async function cmdConnections(creds: CredentialService): Promise<void> {
   }
 }
 
+async function cmdModels(flags: string[]): Promise<void> {
+  const useLmStudio = flags.includes('--lmstudio');
+
+  if (useLmStudio) {
+    const base = process.env.LM_STUDIO_BASE_URL ?? 'http://localhost:1234';
+    let res: Response;
+    try {
+      res = await fetch(`${base}/v1/models`, { signal: AbortSignal.timeout(3000) });
+    } catch {
+      console.log(`❌ LM Studio unreachable at ${base}`);
+      return;
+    }
+    if (!res.ok) { console.log(`❌ LM Studio returned HTTP ${res.status}`); return; }
+    const data = await res.json() as { data: Array<{ id: string }> };
+    if (!data.data?.length) { console.log('No models loaded in LM Studio.'); return; }
+    console.log('LM Studio loaded models:');
+    for (const m of data.data) console.log(`  • ${m.id}`);
+    return;
+  }
+
+  const base = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(3000) });
+  } catch {
+    console.log(`❌ Ollama unreachable at ${base}`);
+    return;
+  }
+  if (!res.ok) { console.log(`❌ Ollama returned HTTP ${res.status}`); return; }
+  const data = await res.json() as { models: Array<{ name: string; size: number; details?: { quantization_level?: string } }> };
+  if (!data.models?.length) { console.log('No models installed in Ollama.'); return; }
+  console.log('Ollama installed models:');
+  for (const m of data.models) {
+    const gb = (m.size / 1e9).toFixed(1);
+    const quant = m.details?.quantization_level ?? '?';
+    console.log(`  • ${m.name}  ${gb} GB  [${quant}]`);
+  }
+}
+
+async function cmdModelUse(modelName: string, prisma: PrismaClient): Promise<void> {
+  console.log(`Running smoke test for "${modelName}"...`);
+  const result = await runSmokeTest(modelName);
+
+  if (!result.ok) {
+    console.log(`❌ Smoke test failed (${result.latencyMs}ms):`);
+    for (const f of result.failures) console.log(`   ${f}`);
+    console.log('Model NOT activated. Fix the issues above or check that the provider is running.');
+    return;
+  }
+
+  console.log(`✅ Smoke test passed (${result.latencyMs}ms)`);
+  await prisma.userSettings.upsert({
+    where: { userId: OPERATOR_ID },
+    update: { model: modelName },
+    create: { userId: OPERATOR_ID, model: modelName },
+  });
+  console.log(`✅ Active model set to "${modelName}"`);
+}
+
+async function cmdModelPull(modelName: string): Promise<void> {
+  const base = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+  console.log(`Pulling "${modelName}" from Ollama at ${base}...`);
+
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/pull`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: modelName, stream: true }),
+      signal: AbortSignal.timeout(600_000),
+    });
+  } catch (err) {
+    console.log(`❌ Ollama unreachable at ${base}: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
+  if (!res.ok || !res.body) {
+    console.log(`❌ Failed to start pull: HTTP ${res.status}`);
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() ?? '';
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const obj = JSON.parse(line) as { status: string; completed?: number; total?: number };
+        if (obj.total && obj.completed) {
+          const pct = Math.round((obj.completed / obj.total) * 100);
+          process.stdout.write(`\r  ${obj.status}  ${pct}%   `);
+        } else {
+          process.stdout.write(`\r  ${obj.status}               `);
+        }
+      } catch { /* ignore incomplete lines */ }
+    }
+  }
+
+  process.stdout.write('\n');
+  console.log(`✅ "${modelName}" pulled successfully`);
+}
+
 async function cmdTest(providerName: string, creds: CredentialService): Promise<void> {
   const masterPassword = await promptHidden('  Master password: ');
   const rawCreds = await creds.load(OPERATOR_ID, providerName, masterPassword);
@@ -89,20 +200,20 @@ async function cmdTest(providerName: string, creds: CredentialService): Promise<
 }
 
 async function main(): Promise<void> {
-  const [,, command, providerName] = process.argv;
+  const [,, command, sub, ...rest] = process.argv;
   const prisma = new PrismaClient();
   const creds = new CredentialService(prisma);
 
   try {
     switch (command) {
       case 'connect':
-        if (!providerName) { console.log('Usage: opentrade connect <provider>'); break; }
-        await cmdConnect(providerName, creds);
+        if (!sub) { console.log('Usage: opentrade connect <provider>'); break; }
+        await cmdConnect(sub, creds);
         break;
 
       case 'disconnect':
-        if (!providerName) { console.log('Usage: opentrade disconnect <provider>'); break; }
-        await cmdDisconnect(providerName, creds);
+        if (!sub) { console.log('Usage: opentrade disconnect <provider>'); break; }
+        await cmdDisconnect(sub, creds);
         break;
 
       case 'connections':
@@ -110,8 +221,26 @@ async function main(): Promise<void> {
         break;
 
       case 'test':
-        if (!providerName) { console.log('Usage: opentrade test <provider>'); break; }
-        await cmdTest(providerName, creds);
+        if (!sub) { console.log('Usage: opentrade test <provider>'); break; }
+        await cmdTest(sub, creds);
+        break;
+
+      case 'models':
+        await cmdModels(sub ? [sub, ...rest] : []);
+        break;
+
+      case 'model':
+        if (sub === 'use') {
+          const modelName = rest[0];
+          if (!modelName) { console.log('Usage: opentrade model use <model-name>'); break; }
+          await cmdModelUse(modelName, prisma);
+        } else if (sub === 'pull') {
+          const modelName = rest[0];
+          if (!modelName) { console.log('Usage: opentrade model pull <model-name>'); break; }
+          await cmdModelPull(modelName);
+        } else {
+          console.log('Usage: opentrade model <use|pull> <model-name>');
+        }
         break;
 
       default:
@@ -119,10 +248,14 @@ async function main(): Promise<void> {
           'OpenTrade CLI',
           '',
           'Commands:',
-          '  opentrade connect <provider>     Save API credentials (encrypted)',
-          '  opentrade disconnect <provider>  Remove stored credentials',
-          '  opentrade connections            List connected exchanges',
-          '  opentrade test <provider>        Verify connection to exchange',
+          '  opentrade connect <provider>          Save API credentials (encrypted)',
+          '  opentrade disconnect <provider>       Remove stored credentials',
+          '  opentrade connections                 List connected exchanges',
+          '  opentrade test <provider>             Verify connection to exchange',
+          '  opentrade models                      List installed Ollama models',
+          '  opentrade models --lmstudio           List models loaded in LM Studio',
+          '  opentrade model use <model-name>      Switch active LLM model (runs smoke test)',
+          '  opentrade model pull <model-name>     Pull a model via Ollama',
           '',
           'Providers: okx, binance, bybit, mock',
         ].join('\n'));

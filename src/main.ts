@@ -12,6 +12,7 @@ import { CredentialService } from './core/credentials.ts';
 import { Engine } from './core/engine.ts';
 import { discoverProviders } from './providers/registry.ts';
 import { Config } from './config.ts';
+import { checkLlmHealth } from './llm/health.ts';
 
 const prisma = new PrismaClient();
 const storage = new PostgresStorage(prisma);
@@ -25,6 +26,7 @@ const engine = new Engine(credentialService, providerRegistry, Config.credential
 if (Config.paper.enabled) {
   console.log('⚠️  PAPER TRADING MODE — no real orders will be placed');
 }
+await checkLlmHealth();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

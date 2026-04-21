@@ -5,25 +5,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-pnpm dev          # Run with tsx (development, no compile step)
-pnpm build        # Compile TypeScript → dist/
-pnpm start        # Run compiled JS (production)
-pnpm test         # Run Vitest suite
-pnpm db:generate  # Regenerate Prisma client after schema changes
-pnpm db:migrate   # Run Prisma migrations (interactive)
+npm run dev       # Run with tsx (development, no compile step)
+npm run build     # Type-check TypeScript (tsc --noEmit)
+npm test          # Run Vitest suite
+npm run db:generate  # Regenerate Prisma client after schema changes
+npm run db:migrate   # Run Prisma migrations (interactive)
 ```
 
 Run a single test file:
 ```bash
-pnpm vitest run src/core/risk.test.ts
+npx vitest run src/core/risk.test.ts
 ```
 
-CLI for credential management (terminal-only, keys never touch Telegram):
+CLI for credential and model management (terminal-only):
 ```bash
-pnpm cli connect okx     # prompt for key/secret/password → encrypt → store
-pnpm cli disconnect okx  # remove from DB
-pnpm cli connections     # list connected exchanges
-pnpm cli test okx        # verify connection
+npm run cli connect okx       # prompt for key/secret/password → encrypt → store
+npm run cli disconnect okx    # remove from DB
+npm run cli connections        # list connected exchanges
+npm run cli test okx           # verify connection (decrypts + calls balance)
+npm run cli models             # list installed Ollama models with size/quantization
+npm run cli models --lmstudio  # list models loaded in LM Studio
+npm run cli model use <name>   # smoke-test model then set as active in DB
+npm run cli model pull <name>  # pull a model via Ollama (streams progress)
 ```
 
 ## Environment
@@ -31,14 +34,21 @@ pnpm cli test okx        # verify connection
 Copy `.env.example` to `.env` and fill in:
 - `TELEGRAM_BOT_TOKEN` — from BotFather
 - `DATABASE_URL` — PostgreSQL connection string
-- `LLM_API_KEY` — OpenRouter (default) or any OpenAI-compatible provider
-- `LLM_MODEL` — defaults to `anthropic/claude-3-5-sonnet`
-- `LLM_BASE_URL` — defaults to `https://openrouter.ai/api/v1`
 - `MASTER_PASSWORD` — encrypts/decrypts all stored API keys (AES-256-GCM)
 - `PAPER_TRADING=true` — enables paper trading mode (no real orders, simulated $10k USDT balance)
 - `RISK_MAX_ORDER_USD` — max single order size in USD (default: 1000)
 - `RISK_MAX_ORDERS_PER_MINUTE` — rate limit per user (default: 5)
 - `RISK_LARGE_ORDER_COOLDOWN_MS` — cooldown after orders ≥$500 (default: 60000)
+
+LLM provider selection — set `LLM_PROVIDER` to one of:
+- `openrouter` (default) — `LLM_API_KEY` + `LLM_BASE_URL` + `LLM_MODEL`
+- `openai` — `OPENAI_API_KEY`
+- `anthropic` — `ANTHROPIC_API_KEY`
+- `gemini` — `GEMINI_API_KEY`
+- `ollama` — `OLLAMA_BASE_URL` (default `http://localhost:11434`)
+- `lmstudio` — `LM_STUDIO_BASE_URL` (default `http://localhost:1234/v1`)
+
+Local providers (ollama, lmstudio) are health-checked on startup and fall back to openrouter if unreachable. Cloud providers skip the health check.
 
 OKX testnet integration tests activate when these are set:
 - `OKX_TESTNET_KEY`, `OKX_TESTNET_SECRET`, `OKX_TESTNET_PASSWORD`
@@ -61,17 +71,23 @@ Telegram → Intent Parser → Confirmation State Machine → Engine → Provide
 
 **`src/core/confirmation.ts`** — DB-backed state machine. States: `CREATED → SHOWN → CONFIRMED → DONE / CANCELLED / EXPIRED / FAILED`. Three tiers: Normal (<$500) one ✅; Large ($500–$5000) ✅ + retype amount; Critical (>$5000 or "sell all") retype + second ✅.
 
-**`src/core/engine.ts`** — Resolves which provider a user has connected, runs risk checks, then dispatches to the appropriate provider method. In paper mode (`PAPER_TRADING=true`) it bypasses credentials entirely and uses a singleton `PaperProvider`. All trade responses are prefixed `[PAPER]` in that mode.
+**`src/core/engine.ts`** — Resolves which provider a user has connected, runs risk checks, then dispatches to the appropriate provider method. Provider instances are cached by `${userId}:${providerName}`. `portfolio`/`balance` aggregates across all connected exchanges for a user. In paper mode (`PAPER_TRADING=true`) it bypasses credentials entirely and uses a singleton `PaperProvider`. All trade responses are prefixed `[PAPER]` in that mode.
 
 **`src/core/risk.ts`** — `RiskManager` enforces four controls before any trade executes: max order size, rate limiting (orders/min), large-order cooldown, and margin/futures block. All thresholds are configurable via env.
 
 **`src/core/credentials.ts`** — AES-256-GCM encryption with per-user scrypt-derived keys. Credentials are decrypted only at execution time and never stored in memory beyond the request.
 
-**`src/providers/`** — Abstract `Provider` in `base.ts`. Auto-discovery in `registry.ts` scans subfolders for `provider.ts` files. Each provider lives in its own folder with `provider.ts` + `SKILL.md`. Current implementations: `mock.ts`, `exchanges/okx/provider.ts` (ccxt), `paper/provider.ts`.
+**`src/llm/provider.ts`** — `getModel(modelName)` factory. Reads `LLM_PROVIDER` at call time and returns the appropriate Vercel AI SDK `LanguageModel`. Cloud providers (openai, anthropic, gemini) use their native SDK clients; local providers (ollama, lmstudio) use `createOpenAI` in compatibility mode pointing at their local HTTP endpoints.
+
+**`src/llm/health.ts`** — Pings local provider on startup; falls back to openrouter by mutating `process.env.LLM_PROVIDER` if unreachable.
+
+**`src/llm/smoke_test.ts`** — Runs two intent-parser test cases ("buy BTC for $100" → trade, "hello" → chat) against a candidate model before `model use` activates it.
+
+**`src/providers/`** — Abstract `Provider` in `base.ts`. Auto-discovery in `registry.ts` walks the directory tree and imports any file named `provider.ts`, registering classes that extend `Provider` by their `name` property. Current implementations: `mock`, `paper`, `okx`, `binance`, `bybit`.
 
 **`src/storage/postgres.ts`** — Prisma wrapper. Tables: `ChatMessage`, `UserSettings`, `PendingConfirmation`, `AuditLog`, `UserCredentials`.
 
-**`prisma/schema.prisma`** — Source of truth for DB schema. Always run `pnpm db:generate` after editing, then `pnpm db:migrate` to apply.
+**`prisma/schema.prisma`** — Source of truth for DB schema. Always run `npm run db:generate` after editing, then `npm run db:migrate` to apply.
 
 ## Architecture Invariants
 
@@ -86,5 +102,6 @@ Telegram → Intent Parser → Confirmation State Machine → Engine → Provide
 
 1. Create `src/providers/exchanges/<name>/provider.ts` extending `Provider` from `../../base.ts`
 2. Implement all abstract methods: `connect`, `getBalance`, `getPrice`, `marketOrder`, `limitOrder`, `cancelOrder`, `getOrders`
-3. Create `src/providers/exchanges/<name>/SKILL.md` with exchange-specific LLM instructions
-4. The provider is auto-discovered — no registration step needed
+3. Set `name` property to a lowercase identifier (used as the registry key and CLI argument)
+4. Create `src/providers/exchanges/<name>/SKILL.md` with exchange-specific LLM instructions
+5. The provider is auto-discovered — no registration step needed
