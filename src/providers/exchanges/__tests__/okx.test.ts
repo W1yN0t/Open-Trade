@@ -1,26 +1,26 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { KrakenProvider } from './provider.ts';
+import { OkxProvider } from '../okx/provider.ts';
 
-// These tests run only when Kraken API credentials are provided.
-// Set env vars to enable: KRAKEN_API_KEY, KRAKEN_API_SECRET
-// Note: Kraken has no official testnet — these tests use real credentials.
+// Set to enable: OKX_TESTNET_KEY, OKX_TESTNET_SECRET, OKX_TESTNET_PASSWORD
 const hasTestnetCreds =
-  !!process.env.KRAKEN_API_KEY &&
-  !!process.env.KRAKEN_API_SECRET;
+  !!process.env.OKX_TESTNET_KEY &&
+  !!process.env.OKX_TESTNET_SECRET &&
+  !!process.env.OKX_TESTNET_PASSWORD;
 
-describe.skipIf(!hasTestnetCreds)('KrakenProvider — integration', () => {
-  let provider: KrakenProvider;
+describe.skipIf(!hasTestnetCreds)('OkxProvider — testnet integration', () => {
+  let provider: OkxProvider;
 
   beforeAll(async () => {
-    provider = new KrakenProvider();
+    provider = new OkxProvider();
     const connected = await provider.connect({
-      apiKey: process.env.KRAKEN_API_KEY!,
-      apiSecret: process.env.KRAKEN_API_SECRET!,
+      apiKey: process.env.OKX_TESTNET_KEY!,
+      apiSecret: process.env.OKX_TESTNET_SECRET!,
+      password: process.env.OKX_TESTNET_PASSWORD!,
     });
-    if (!connected) throw new Error('Could not connect to Kraken');
+    if (!connected) throw new Error('Could not connect to OKX testnet');
   });
 
-  it('connects successfully', () => {
+  it('connects to testnet', () => {
     expect(provider).toBeDefined();
   });
 
@@ -49,20 +49,19 @@ describe.skipIf(!hasTestnetCreds)('KrakenProvider — integration', () => {
   });
 });
 
-// Unit tests — no network required
-describe('KrakenProvider — unit', () => {
+describe('OkxProvider — unit', () => {
   it('is instantiable', () => {
-    const p = new KrakenProvider();
-    expect(p.name).toBe('kraken');
+    const p = new OkxProvider();
+    expect(p.name).toBe('okx');
   });
 
   it('throws when calling exchange methods before connect()', async () => {
-    const p = new KrakenProvider();
+    const p = new OkxProvider();
     await expect(p.getBalance()).rejects.toThrow('connect()');
   });
 
   it('throws on price fetch before connect()', async () => {
-    const p = new KrakenProvider();
+    const p = new OkxProvider();
     await expect(p.getPrice('BTC/USDT')).rejects.toThrow('connect()');
   });
 });

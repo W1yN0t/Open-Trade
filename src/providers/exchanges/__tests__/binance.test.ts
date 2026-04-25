@@ -1,28 +1,24 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { OkxProvider } from './provider.ts';
+import { BinanceProvider } from '../binance/provider.ts';
 
-// These tests run only when OKX testnet credentials are provided.
-// Set env vars to enable: OKX_TESTNET_KEY, OKX_TESTNET_SECRET, OKX_TESTNET_PASSWORD
+// Set to enable: BINANCE_API_KEY, BINANCE_API_SECRET
 const hasTestnetCreds =
-  !!process.env.OKX_TESTNET_KEY &&
-  !!process.env.OKX_TESTNET_SECRET &&
-  !!process.env.OKX_TESTNET_PASSWORD;
+  !!process.env.BINANCE_API_KEY &&
+  !!process.env.BINANCE_API_SECRET;
 
-describe.skipIf(!hasTestnetCreds)('OkxProvider — testnet integration', () => {
-  let provider: OkxProvider;
+describe.skipIf(!hasTestnetCreds)('BinanceProvider — integration', () => {
+  let provider: BinanceProvider;
 
   beforeAll(async () => {
-    provider = new OkxProvider();
-    // OKX testnet uses same endpoints but sandbox flag in ccxt
+    provider = new BinanceProvider();
     const connected = await provider.connect({
-      apiKey: process.env.OKX_TESTNET_KEY!,
-      apiSecret: process.env.OKX_TESTNET_SECRET!,
-      password: process.env.OKX_TESTNET_PASSWORD!,
+      apiKey: process.env.BINANCE_API_KEY!,
+      apiSecret: process.env.BINANCE_API_SECRET!,
     });
-    if (!connected) throw new Error('Could not connect to OKX testnet');
+    if (!connected) throw new Error('Could not connect to Binance');
   });
 
-  it('connects to testnet', () => {
+  it('connects successfully', () => {
     expect(provider).toBeDefined();
   });
 
@@ -51,20 +47,19 @@ describe.skipIf(!hasTestnetCreds)('OkxProvider — testnet integration', () => {
   });
 });
 
-// Unit tests that always run — no network required
-describe('OkxProvider — unit', () => {
+describe('BinanceProvider — unit', () => {
   it('is instantiable', () => {
-    const p = new OkxProvider();
-    expect(p.name).toBe('okx');
+    const p = new BinanceProvider();
+    expect(p.name).toBe('binance');
   });
 
   it('throws when calling exchange methods before connect()', async () => {
-    const p = new OkxProvider();
+    const p = new BinanceProvider();
     await expect(p.getBalance()).rejects.toThrow('connect()');
   });
 
-  it('throws on authenticated calls before connect', async () => {
-    const p = new OkxProvider();
-    await expect(p.getBalance()).rejects.toThrow('connect()');
+  it('throws on price fetch before connect()', async () => {
+    const p = new BinanceProvider();
+    await expect(p.getPrice('BTC/USDT')).rejects.toThrow('connect()');
   });
 });
