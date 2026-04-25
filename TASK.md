@@ -211,15 +211,17 @@ so each is a thin adapter on top of the existing `getModel()` factory.
 
 ---
 
-## Phase 6 — CLI Configuration UX
+## Phase 6 — CLI UX
 
-- [ ] `pnpm cli config` — interactive wizard: exchange keys, LLM provider, risk limits, paper mode
-- [ ] `pnpm cli config set RISK_MAX_ORDER_USD 500` — set any env key without editing `.env` manually
-- [ ] `pnpm cli config show` — pretty-print all active settings with sources (env / DB / default)
-- [ ] `pnpm cli config reset` — restore defaults with confirmation prompt
-- [ ] `pnpm cli status` — one-shot health dashboard: DB ping, exchange connections, active model, paper mode flag
-- [ ] `pnpm cli logs [--tail 50]` — stream or paginate audit log from DB in human-readable format
-- [ ] Shell completions: generate bash/zsh completion script via `pnpm cli completion`
+- [x] Refactor CLI from single file (`src/cli.ts`) to module (`src/cli/`)
+- [x] Interactive main menu with filter-as-you-type command selection (`enquirer` AutoComplete)
+- [x] Arrow key navigation in all select prompts
+- [x] `npm run cli config` — step-by-step wizard: LLM provider, API key, model, risk limits, paper mode
+- [x] `npm run cli config show` — pretty table of all settings with source (env / default)
+- [x] `npm run cli config set KEY VALUE` — update `.env` key with confirmation
+- [x] `npm run cli config reset` — restore defaults (keeps credentials)
+- [x] `npm run cli status` — health dashboard: DB, exchanges, model, paper mode, risk limits, scheduler
+- [x] `npm run cli logs [--tail N]` — colored audit log from DB with pagination
 
 ---
 
