@@ -29,6 +29,9 @@ function intent(overrides: Partial<TradeIntent>): TradeIntent {
     orderId: null,
     side: null,
     condition: null,
+    interval: null,
+    takeProfitPct: null,
+    stopLossPct: null,
     confidence: 0.95,
     ...overrides,
   };

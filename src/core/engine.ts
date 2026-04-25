@@ -3,6 +3,9 @@ import type { TradeIntent } from './intent_parser.ts';
 import type { CredentialService } from './credentials.ts';
 import { RiskManager } from './risk.ts';
 import { PaperProvider } from '../providers/paper/provider.ts';
+import type { DcaService } from './dca.ts';
+import type { AlertService } from './alerts.ts';
+import type { AnalyticsService } from './analytics.ts';
 
 const STABLECOINS = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'FDUSD', 'TUSD']);
 const TRADE_ACTIONS = new Set(['buy', 'sell', 'swap', 'limit', 'stop']);
@@ -18,9 +21,12 @@ export class Engine {
     private readonly providerRegistry: Map<string, typeof Provider>,
     private readonly masterPassword: string,
     private readonly options: { paperMode?: boolean } = {},
+    private readonly dcaService?: DcaService,
+    private readonly alertService?: AlertService,
+    private readonly analyticsService?: AnalyticsService,
   ) {}
 
-  async execute(intent: TradeIntent, userId: string): Promise<string> {
+  async execute(intent: TradeIntent, userId: string, chatId?: string): Promise<string> {
     const provider = await this.getProvider(userId);
     const paper = this.options.paperMode ? '[PAPER] ' : '';
 
@@ -39,12 +45,15 @@ export class Engine {
       case 'price':    return this.price(provider, intent);
       case 'orders':   return this.openOrders(provider, paper);
       case 'buy':
-      case 'swap':     return this.buy(provider, intent, userId, paper);
-      case 'sell':     return this.sell(provider, intent, userId, paper);
-      case 'limit':    return this.limitOrder(provider, intent, userId, paper);
-      case 'cancel':   return this.cancelOrder(provider, intent);
-      case 'stop':     return '⚠️ Stop orders are not yet supported by this provider.';
-      default:         throw new Error(`Unsupported action: ${intent.action}`);
+      case 'swap':     return this.buy(provider, intent, userId, chatId ?? '', paper);
+      case 'sell':     return this.sell(provider, intent, userId, chatId ?? '', paper);
+      case 'limit':    return this.limitOrder(provider, intent, userId, chatId ?? '', paper);
+      case 'cancel':    return this.cancelOrder(provider, intent);
+      case 'stop':      return '⚠️ Stop orders are not yet supported by this provider.';
+      case 'dca':       return this.handleDca(intent, userId, chatId ?? '');
+      case 'alert':     return this.handleAlert(intent, userId, chatId ?? '');
+      case 'analytics': return this.handleAnalytics(userId);
+      default:          throw new Error(`Unsupported action: ${intent.action}`);
     }
   }
 
@@ -180,7 +189,7 @@ export class Engine {
     }
   }
 
-  private async buy(provider: Provider, intent: TradeIntent, userId: string, paper = ''): Promise<string> {
+  private async buy(provider: Provider, intent: TradeIntent, userId: string, chatId = '', paper = ''): Promise<string> {
     const symbol = `${intent.asset}/${intent.quoteCurrency}`;
     let amount = intent.amount ?? 0;
 
@@ -198,10 +207,13 @@ export class Engine {
 
     const order = await provider.marketOrder(symbol, 'buy', amount);
     this.risk.recordOrder(userId, await this.estimateUsd(provider, intent));
-    return `${paper}✅ Market buy placed\n${order.amount} ${intent.asset}\nOrder ID: ${order.id} — ${order.status}`;
+    const result = `${paper}✅ Market buy placed\n${order.amount} ${intent.asset}\nOrder ID: ${order.id} — ${order.status}`;
+
+    await this.attachTpSl(intent, userId, chatId, provider, symbol);
+    return result;
   }
 
-  private async sell(provider: Provider, intent: TradeIntent, userId: string, paper = ''): Promise<string> {
+  private async sell(provider: Provider, intent: TradeIntent, userId: string, chatId = '', paper = ''): Promise<string> {
     const symbol = `${intent.asset}/${intent.quoteCurrency}`;
     let amount = intent.amount ?? 0;
 
@@ -227,7 +239,7 @@ export class Engine {
     return `${paper}✅ Market sell placed\n${order.amount} ${intent.asset}\nOrder ID: ${order.id} — ${order.status}`;
   }
 
-  private async limitOrder(provider: Provider, intent: TradeIntent, userId: string, paper = ''): Promise<string> {
+  private async limitOrder(provider: Provider, intent: TradeIntent, userId: string, chatId = '', paper = ''): Promise<string> {
     if (!intent.limitPrice) throw new Error('Limit price not specified. Example: "buy BTC at $60000"');
     if (!intent.amount) throw new Error('Amount not specified. Example: "buy 0.1 BTC at $60000"');
 
@@ -248,5 +260,49 @@ export class Engine {
     return ok
       ? `✅ Order #${intent.orderId} cancelled.`
       : `❌ Could not cancel order #${intent.orderId}. It may already be filled or cancelled.`;
+  }
+
+  // ── Advanced strategies ───────────────────────────────────────────────────
+
+  private async handleDca(intent: TradeIntent, userId: string, chatId: string): Promise<string> {
+    if (!this.dcaService) return '⚠️ DCA service not available.';
+    return this.dcaService.create(userId, chatId, intent);
+  }
+
+  private async handleAlert(intent: TradeIntent, userId: string, chatId: string): Promise<string> {
+    if (!this.alertService) return '⚠️ Alert service not available.';
+    return this.alertService.create(userId, chatId, intent);
+  }
+
+  private async handleAnalytics(userId: string): Promise<string> {
+    if (!this.analyticsService) return '⚠️ Analytics service not available.';
+    const providers = await this.getAllProviders(userId);
+    return this.analyticsService.getPortfolioAnalytics(userId, providers);
+  }
+
+  private async attachTpSl(
+    intent: TradeIntent,
+    userId: string,
+    chatId: string,
+    provider: Provider,
+    symbol: string,
+  ): Promise<void> {
+    if (!this.alertService) return;
+    if (!intent.takeProfitPct && !intent.stopLossPct) return;
+    try {
+      const entryPrice = await provider.getPrice(symbol);
+      if (entryPrice <= 0) return;
+      await this.alertService.createTpSl(
+        userId, chatId, intent.asset, intent.quoteCurrency,
+        entryPrice, intent.takeProfitPct ?? null, intent.stopLossPct ?? null,
+      );
+    } catch {
+      // Non-fatal — don't block the buy response
+    }
+  }
+
+  async fetchPrice(asset: string, quoteCurrency: string, userId: string): Promise<number> {
+    const provider = await this.getProvider(userId);
+    return provider.getPrice(`${asset}/${quoteCurrency}`);
   }
 }

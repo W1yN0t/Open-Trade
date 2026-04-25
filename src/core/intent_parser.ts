@@ -6,7 +6,7 @@ export const IntentSchema = z.object({
   type: z.enum(['trade', 'chat']),
   confidence: z.number().min(0).max(1).describe('Confidence score for the classification'),
   action: z
-    .enum(['buy', 'sell', 'swap', 'limit', 'stop', 'portfolio', 'balance', 'price', 'orders', 'cancel', 'history'])
+    .enum(['buy', 'sell', 'swap', 'limit', 'stop', 'portfolio', 'balance', 'price', 'orders', 'cancel', 'history', 'dca', 'alert', 'analytics'])
     .nullable()
     .describe('Trade action type, null for chat'),
   asset: z.string().nullable().describe('Asset symbol e.g. BTC, ETH, SOL. Null for chat'),
@@ -20,6 +20,9 @@ export const IntentSchema = z.object({
   orderId: z.string().nullable().describe('Order ID for cancel operations'),
   side: z.enum(['buy', 'sell']).nullable().describe('Trade side: buy or sell. For action=limit/stop derive from context.'),
   condition: z.string().nullable().describe('Conditional trigger e.g. "when price drops to 150"'),
+  interval: z.string().nullable().describe('Recurrence for DCA e.g. "daily", "weekly", "every 3 days"'),
+  takeProfitPct: z.number().nullable().describe('Take-profit percentage above entry price e.g. 20 for +20%'),
+  stopLossPct: z.number().nullable().describe('Stop-loss percentage below entry price e.g. 10 for -10%'),
 });
 
 export type RawIntent = z.infer<typeof IntentSchema>;
@@ -31,7 +34,7 @@ export interface TradeIntent extends RawIntent {
   quoteCurrency: NonNullable<RawIntent['quoteCurrency']>;
 }
 
-export const READ_ONLY_ACTIONS = new Set(['portfolio', 'balance', 'price', 'orders', 'history'] as const);
+export const READ_ONLY_ACTIONS = new Set(['portfolio', 'balance', 'price', 'orders', 'history', 'analytics', 'dca', 'alert'] as const);
 
 export interface ChatIntent extends RawIntent {
   type: 'chat';
@@ -67,7 +70,12 @@ AMOUNT EXTRACTION RULES (very important):
 - If BOTH are present (e.g. "buy 0.5 BTC at $10000 for $100"), prefer the spend amount: amount=100, amountType="quote", limitPrice=10000.
 - Phrases like "по цене", "at price", "at $X", "по $X" always indicate limitPrice, never amount.
 
-Default quoteCurrency to "USDT" if not specified.`;
+Default quoteCurrency to "USDT" if not specified.
+
+DCA: "buy BTC $100 every week" → action=dca, interval="weekly"
+ALERT: "notify when ETH drops below 2000" → action=alert, limitPrice=2000, condition="below"
+ANALYTICS: "show portfolio analytics", "my PnL" → action=analytics
+TP/SL: "buy SOL, take profit at +20%, stop loss at -10%" → action=buy + takeProfitPct=20, stopLossPct=10`;
 
 export async function parseIntent(text: string, model: string): Promise<Intent> {
   const { object } = await generateObject({

@@ -10,6 +10,10 @@ import {
 } from './core/confirmation.ts';
 import { CredentialService } from './core/credentials.ts';
 import { Engine } from './core/engine.ts';
+import { DcaService } from './core/dca.ts';
+import { AlertService } from './core/alerts.ts';
+import { AnalyticsService } from './core/analytics.ts';
+import { Scheduler } from './core/scheduler.ts';
 import { discoverProviders } from './providers/registry.ts';
 import { Config } from './config.ts';
 import { checkLlmHealth } from './llm/health.ts';
@@ -21,12 +25,21 @@ const confirmationService = new ConfirmationService();
 const credentialService = new CredentialService(prisma);
 
 const providerRegistry = await discoverProviders();
-const engine = new Engine(credentialService, providerRegistry, Config.credentials.masterPassword, { paperMode: Config.paper.enabled });
+const dcaService = new DcaService(storage);
+const alertService = new AlertService(storage);
+const analyticsService = new AnalyticsService(storage);
+const engine = new Engine(
+  credentialService, providerRegistry, Config.credentials.masterPassword,
+  { paperMode: Config.paper.enabled },
+  dcaService, alertService, analyticsService,
+);
+const scheduler = new Scheduler(storage, engine, telegram);
 
 if (Config.paper.enabled) {
   console.log('⚠️  PAPER TRADING MODE — no real orders will be placed');
 }
 await checkLlmHealth();
+scheduler.start();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -125,7 +138,7 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
     // Read-only actions: execute immediately, no confirmation needed
     if (intent.action !== null && READ_ONLY_ACTIONS.has(intent.action as never) && intent.confidence >= 0.8) {
       try {
-        const result = await engine.execute(intent, msg.userId);
+        const result = await engine.execute(intent, msg.userId, msg.chatId);
         await telegram.sendMessage({ chatId: msg.chatId, text: result });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : 'Unknown error';
@@ -227,6 +240,7 @@ const expiryInterval = setInterval(async () => {
 
 process.on('SIGINT', async () => {
   clearInterval(expiryInterval);
+  scheduler.stop();
   await telegram.stop();
   await storage.disconnect();
   await prisma.$disconnect();

@@ -65,3 +65,35 @@ model UserCredentials {
   @@unique([userId, provider])
   @@index([userId])
 }
+
+model DcaSchedule {
+  id            String   @id @default(cuid())
+  userId        String
+  chatId        String
+  asset         String
+  quoteCurrency String
+  amount        Float
+  intervalMs    Float
+  nextRunAt     DateTime
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@index([isActive, nextRunAt])
+  @@index([userId])
+}
+
+model PriceAlert {
+  id            String   @id @default(cuid())
+  userId        String
+  chatId        String
+  asset         String
+  quoteCurrency String
+  condition     String
+  targetPrice   Float
+  triggerAction Json?
+  isTriggered   Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([isTriggered])
+  @@index([userId])
+}

@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import type { StoredConfirmation, ConfirmationState, ConfirmationSubState } from '../core/confirmation.ts';
 import type { TradeIntent } from '../core/intent_parser.ts';
 import { Config } from '../config.ts';
@@ -135,6 +135,104 @@ export class PostgresStorage {
       take: limit,
     });
     return rows.map((r: any) => ({ ...r, intent: r.intent as TradeIntent }));
+  }
+
+  // ── DCA schedules ─────────────────────────────────────────────────────────
+
+  async createDca(data: {
+    userId: string;
+    chatId: string;
+    asset: string;
+    quoteCurrency: string;
+    amount: number;
+    intervalMs: number;
+    nextRunAt: Date;
+  }) {
+    return this.prisma.dcaSchedule.create({ data });
+  }
+
+  async listDca(userId: string) {
+    return this.prisma.dcaSchedule.findMany({
+      where: { userId, isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async cancelDca(id: string, userId: string): Promise<boolean> {
+    const result = await this.prisma.dcaSchedule.updateMany({
+      where: { id, userId, isActive: true },
+      data: { isActive: false },
+    });
+    return result.count > 0;
+  }
+
+  async getDueDcaSchedules() {
+    return this.prisma.dcaSchedule.findMany({
+      where: { isActive: true, nextRunAt: { lte: new Date() } },
+    });
+  }
+
+  async updateDcaNextRun(id: string, nextRunAt: Date): Promise<void> {
+    await this.prisma.dcaSchedule.update({ where: { id }, data: { nextRunAt } });
+  }
+
+  // ── Price alerts ──────────────────────────────────────────────────────────
+
+  async createAlert(data: {
+    userId: string;
+    chatId: string;
+    asset: string;
+    quoteCurrency: string;
+    condition: string;
+    targetPrice: number;
+    triggerAction?: object | null;
+  }) {
+    return this.prisma.priceAlert.create({
+      data: {
+        ...data,
+        triggerAction: data.triggerAction ?? Prisma.JsonNull,
+      },
+    });
+  }
+
+  async listAlerts(userId: string) {
+    return this.prisma.priceAlert.findMany({
+      where: { userId, isTriggered: false },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async cancelAlert(id: string, userId: string): Promise<boolean> {
+    const result = await this.prisma.priceAlert.updateMany({
+      where: { id, userId, isTriggered: false },
+      data: { isTriggered: true },
+    });
+    return result.count > 0;
+  }
+
+  async getActiveAlerts() {
+    return this.prisma.priceAlert.findMany({
+      where: { isTriggered: false },
+    });
+  }
+
+  async markAlertTriggered(id: string): Promise<void> {
+    await this.prisma.priceAlert.update({ where: { id }, data: { isTriggered: true } });
+  }
+
+  // ── Analytics ─────────────────────────────────────────────────────────────
+
+  async getTradeHistorySince(userId: string, since: Date): Promise<Array<{
+    action: string;
+    intent: import('../core/intent_parser.ts').TradeIntent;
+    status: string;
+    executedAt: Date;
+  }>> {
+    const rows = await this.prisma.auditLog.findMany({
+      where: { userId, executedAt: { gte: since } },
+      orderBy: { executedAt: 'asc' },
+    });
+    return rows.map((r: any) => ({ ...r, intent: r.intent as import('../core/intent_parser.ts').TradeIntent }));
   }
 
   // ── Misc ──────────────────────────────────────────────────────────────────
