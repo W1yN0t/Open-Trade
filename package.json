@@ -5,6 +5,9 @@
   "engines": {
     "node": ">=24"
   },
+  "bin": {
+    "opentrade": "bin/opentrade.cjs"
+  },
   "scripts": {
     "dev": "tsx src/main.ts",
     "cli": "tsx src/cli/index.ts",

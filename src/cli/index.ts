@@ -1,3 +1,4 @@
+#!/usr/bin/env tsx
 import 'dotenv/config';
 import Enquirer from 'enquirer';
 import { PrismaClient } from '@prisma/client';
