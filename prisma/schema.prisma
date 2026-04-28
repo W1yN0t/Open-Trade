@@ -97,3 +97,13 @@ model PriceAlert {
   @@index([isTriggered])
   @@index([userId])
 }
+
+// Persists rate-limit + cooldown state across process restarts so a crash
+// or redeploy cannot reset a user's risk window. `recentOrderTimestamps` is
+// a JSON array of unix-ms numbers (orders within the last minute).
+model UserRiskState {
+  userId                  String    @id
+  recentOrderTimestamps   Json      @default("[]")
+  lastLargeOrderAt        DateTime?
+  updatedAt               DateTime  @updatedAt
+}

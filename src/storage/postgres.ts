@@ -74,6 +74,28 @@ export class PostgresStorage {
     await this.prisma.pendingConfirmation.update({ where: { id }, data });
   }
 
+  // Atomic compare-and-swap on confirmation state, used to avoid double
+  // execution when a user mashes the ✅ button. Returns true iff exactly one
+  // row was updated (i.e. the caller "won" the transition).
+  async tryTransitionConfirmation(
+    id: string,
+    expected: { state: ConfirmationState; subState?: ConfirmationSubState },
+    next: Partial<{
+      state: ConfirmationState;
+      subState: ConfirmationSubState;
+      messageId: string;
+      expectedInput: string | null;
+    }>,
+  ): Promise<boolean> {
+    const where: { id: string; state: ConfirmationState; subState?: ConfirmationSubState | null } = {
+      id,
+      state: expected.state,
+    };
+    if (expected.subState !== undefined) where.subState = expected.subState;
+    const result = await this.prisma.pendingConfirmation.updateMany({ where, data: next });
+    return result.count === 1;
+  }
+
   async getConfirmationById(id: string): Promise<StoredConfirmation | null> {
     const record = await this.prisma.pendingConfirmation.findUnique({ where: { id } });
     return record ? this.toConfirmation(record) : null;
@@ -233,6 +255,41 @@ export class PostgresStorage {
       orderBy: { executedAt: 'asc' },
     });
     return rows.map((r: any) => ({ ...r, intent: r.intent as import('../core/intent_parser.ts').TradeIntent }));
+  }
+
+  // ── Risk state ────────────────────────────────────────────────────────────
+
+  async getRiskState(userId: string): Promise<{
+    recentOrderTimestamps: number[];
+    lastLargeOrderAt: Date | null;
+  }> {
+    const row = await this.prisma.userRiskState.findUnique({ where: { userId } });
+    if (!row) return { recentOrderTimestamps: [], lastLargeOrderAt: null };
+    const stamps = Array.isArray(row.recentOrderTimestamps)
+      ? (row.recentOrderTimestamps as number[]).filter(t => typeof t === 'number')
+      : [];
+    return {
+      recentOrderTimestamps: stamps,
+      lastLargeOrderAt: row.lastLargeOrderAt ?? null,
+    };
+  }
+
+  async saveRiskState(
+    userId: string,
+    state: { recentOrderTimestamps: number[]; lastLargeOrderAt: Date | null },
+  ): Promise<void> {
+    await this.prisma.userRiskState.upsert({
+      where: { userId },
+      create: {
+        userId,
+        recentOrderTimestamps: state.recentOrderTimestamps,
+        lastLargeOrderAt: state.lastLargeOrderAt,
+      },
+      update: {
+        recentOrderTimestamps: state.recentOrderTimestamps,
+        lastLargeOrderAt: state.lastLargeOrderAt,
+      },
+    });
   }
 
   // ── Misc ──────────────────────────────────────────────────────────────────

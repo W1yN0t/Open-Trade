@@ -6,6 +6,7 @@ import { PaperProvider } from '../providers/paper/provider.ts';
 import type { DcaService } from './dca.ts';
 import type { AlertService } from './alerts.ts';
 import type { AnalyticsService } from './analytics.ts';
+import type { PostgresStorage } from '../storage/postgres.ts';
 
 const STABLECOINS = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'FDUSD', 'TUSD']);
 const TRADE_ACTIONS = new Set(['buy', 'sell', 'swap', 'limit', 'stop']);
@@ -13,26 +14,38 @@ const TRADE_ACTIONS = new Set(['buy', 'sell', 'swap', 'limit', 'stop']);
 export class Engine {
   // key: `${userId}:${providerName}` to support multiple exchanges per user
   private cache = new Map<string, Provider>();
-  private risk = new RiskManager();
-  private paperProvider: PaperProvider | null = null;
+  private risk: RiskManager;
+  // paper-mode balances are per-user — sharing one PaperProvider across
+  // users would let them see and spend each other's simulated funds.
+  private paperProviders = new Map<string, PaperProvider>();
 
   constructor(
     private readonly credentialService: CredentialService,
     private readonly providerRegistry: Map<string, typeof Provider>,
     private readonly masterPassword: string,
-    private readonly options: { paperMode?: boolean } = {},
+    private readonly options: { paperMode?: boolean; storage?: PostgresStorage } = {},
     private readonly dcaService?: DcaService,
     private readonly alertService?: AlertService,
     private readonly analyticsService?: AnalyticsService,
-  ) {}
+  ) {
+    this.risk = new RiskManager({}, options.storage);
+  }
 
   async execute(intent: TradeIntent, userId: string, chatId?: string): Promise<string> {
     const provider = await this.getProvider(userId);
     const paper = this.options.paperMode ? '[PAPER] ' : '';
 
+    let estimatedUsd = 0;
     if (TRADE_ACTIONS.has(intent.action as string)) {
-      const estimatedUsd = await this.estimateUsd(provider, intent);
-      const blocked = this.risk.check(userId, intent, estimatedUsd);
+      // Fail-closed: if we cannot estimate the order's USD value (price/balance
+      // fetch failed), refuse the trade rather than letting it bypass risk
+      // limits with an implicit value of $0.
+      const estimate = await this.estimateUsdStrict(provider, intent);
+      if (estimate === null) {
+        return '⚠️ Could not verify order size (price unavailable). Trade refused for safety.';
+      }
+      estimatedUsd = estimate;
+      const blocked = await this.risk.check(userId, intent, estimatedUsd);
       if (blocked) return blocked;
     }
 
@@ -45,9 +58,9 @@ export class Engine {
       case 'price':    return this.price(provider, intent);
       case 'orders':   return this.openOrders(provider, paper);
       case 'buy':
-      case 'swap':     return this.buy(provider, intent, userId, chatId ?? '', paper);
-      case 'sell':     return this.sell(provider, intent, userId, chatId ?? '', paper);
-      case 'limit':    return this.limitOrder(provider, intent, userId, chatId ?? '', paper);
+      case 'swap':     return this.buy(provider, intent, userId, chatId ?? '', paper, estimatedUsd);
+      case 'sell':     return this.sell(provider, intent, userId, chatId ?? '', paper, estimatedUsd);
+      case 'limit':    return this.limitOrder(provider, intent, userId, chatId ?? '', paper, estimatedUsd);
       case 'cancel':    return this.cancelOrder(provider, intent);
       case 'stop':      return '⚠️ Stop orders are not yet supported by this provider.';
       case 'dca':       return this.handleDca(intent, userId, chatId ?? '');
@@ -61,20 +74,20 @@ export class Engine {
     return !!this.options.paperMode;
   }
 
-  async estimateUsdForIntent(intent: TradeIntent, userId: string): Promise<number> {
+  // Returns null when the USD value cannot be determined (callers must treat
+  // that as "unknown" rather than "$0"). Used by the confirmation flow to pick
+  // a confirmation level — when unknown, the caller should escalate to critical.
+  async estimateUsdForIntent(intent: TradeIntent, userId: string): Promise<number | null> {
     try {
       const provider = await this.getProvider(userId);
-      return this.estimateUsd(provider, intent);
+      return await this.estimateUsdStrict(provider, intent);
     } catch {
-      return 0;
+      return null;
     }
   }
 
   private async getProvider(userId: string): Promise<Provider> {
-    if (this.options.paperMode) {
-      if (!this.paperProvider) this.paperProvider = new PaperProvider();
-      return this.paperProvider;
-    }
+    if (this.options.paperMode) return this.getPaperProvider(userId);
 
     const names = await this.credentialService.list(userId);
     if (names.length === 0) {
@@ -85,10 +98,7 @@ export class Engine {
   }
 
   private async getAllProviders(userId: string): Promise<Provider[]> {
-    if (this.options.paperMode) {
-      if (!this.paperProvider) this.paperProvider = new PaperProvider();
-      return [this.paperProvider];
-    }
+    if (this.options.paperMode) return [this.getPaperProvider(userId)];
 
     const names = await this.credentialService.list(userId);
     if (names.length === 0) {
@@ -96,6 +106,15 @@ export class Engine {
     }
 
     return Promise.all(names.map(name => this.loadProvider(userId, name)));
+  }
+
+  private getPaperProvider(userId: string): PaperProvider {
+    let provider = this.paperProviders.get(userId);
+    if (!provider) {
+      provider = new PaperProvider();
+      this.paperProviders.set(userId, provider);
+    }
+    return provider;
   }
 
   private async loadProvider(userId: string, name: string): Promise<Provider> {
@@ -170,26 +189,30 @@ export class Engine {
     return lines.join('\n');
   }
 
-  private async estimateUsd(provider: Provider, intent: TradeIntent): Promise<number> {
-    try {
-      if (!intent.asset || !intent.quoteCurrency) return 0;
-      if (intent.amountType === 'quote') return intent.amount ?? 0;
-      if (intent.amountType === 'percent') {
-        const balances = await provider.getBalance();
-        const b = balances.find(bal => bal.asset === intent.asset);
-        if (!b) return 0;
-        const price = await provider.getPrice(`${intent.asset}/${intent.quoteCurrency}`);
-        return b.free * ((intent.amount ?? 0) / 100) * price;
-      }
-      if (intent.limitPrice && intent.amount) return intent.amount * intent.limitPrice;
+  // Returns the USD value of `intent`, or null if it cannot be determined.
+  // Never swallows price/balance errors as zero — that would silently disable
+  // the risk-size check (see risk.check).
+  private async estimateUsdStrict(provider: Provider, intent: TradeIntent): Promise<number | null> {
+    if (!intent.asset || !intent.quoteCurrency) return null;
+    if (intent.amountType === 'quote') return intent.amount ?? 0;
+
+    if (intent.amountType === 'percent') {
+      const balances = await provider.getBalance();
+      const b = balances.find(bal => bal.asset === intent.asset);
+      if (!b) return 0;
       const price = await provider.getPrice(`${intent.asset}/${intent.quoteCurrency}`);
-      return (intent.amount ?? 0) * price;
-    } catch {
-      return 0;
+      if (!price) return null;
+      return b.free * ((intent.amount ?? 0) / 100) * price;
     }
+
+    if (intent.limitPrice && intent.amount) return intent.amount * intent.limitPrice;
+
+    const price = await provider.getPrice(`${intent.asset}/${intent.quoteCurrency}`);
+    if (!price) return null;
+    return (intent.amount ?? 0) * price;
   }
 
-  private async buy(provider: Provider, intent: TradeIntent, userId: string, chatId = '', paper = ''): Promise<string> {
+  private async buy(provider: Provider, intent: TradeIntent, userId: string, chatId = '', paper = '', estimatedUsd = 0): Promise<string> {
     const symbol = `${intent.asset}/${intent.quoteCurrency}`;
     let amount = intent.amount ?? 0;
 
@@ -201,19 +224,19 @@ export class Engine {
 
     if (intent.limitPrice) {
       const order = await provider.limitOrder(symbol, 'buy', amount, intent.limitPrice);
-      this.risk.recordOrder(userId, await this.estimateUsd(provider, intent));
+      await this.risk.recordOrder(userId, estimatedUsd);
       return `${paper}✅ Limit buy placed\n${order.amount} ${intent.asset} @ $${intent.limitPrice.toLocaleString()}\nOrder ID: ${order.id} — ${order.status}`;
     }
 
     const order = await provider.marketOrder(symbol, 'buy', amount);
-    this.risk.recordOrder(userId, await this.estimateUsd(provider, intent));
+    await this.risk.recordOrder(userId, estimatedUsd);
     const result = `${paper}✅ Market buy placed\n${order.amount} ${intent.asset}\nOrder ID: ${order.id} — ${order.status}`;
 
     await this.attachTpSl(intent, userId, chatId, provider, symbol);
     return result;
   }
 
-  private async sell(provider: Provider, intent: TradeIntent, userId: string, chatId = '', paper = ''): Promise<string> {
+  private async sell(provider: Provider, intent: TradeIntent, userId: string, chatId = '', paper = '', estimatedUsd = 0): Promise<string> {
     const symbol = `${intent.asset}/${intent.quoteCurrency}`;
     let amount = intent.amount ?? 0;
 
@@ -230,16 +253,16 @@ export class Engine {
 
     if (intent.limitPrice) {
       const order = await provider.limitOrder(symbol, 'sell', amount, intent.limitPrice);
-      this.risk.recordOrder(userId, await this.estimateUsd(provider, intent));
+      await this.risk.recordOrder(userId, estimatedUsd);
       return `${paper}✅ Limit sell placed\n${order.amount} ${intent.asset} @ $${intent.limitPrice.toLocaleString()}\nOrder ID: ${order.id} — ${order.status}`;
     }
 
     const order = await provider.marketOrder(symbol, 'sell', amount);
-    this.risk.recordOrder(userId, await this.estimateUsd(provider, intent));
+    await this.risk.recordOrder(userId, estimatedUsd);
     return `${paper}✅ Market sell placed\n${order.amount} ${intent.asset}\nOrder ID: ${order.id} — ${order.status}`;
   }
 
-  private async limitOrder(provider: Provider, intent: TradeIntent, userId: string, chatId = '', paper = ''): Promise<string> {
+  private async limitOrder(provider: Provider, intent: TradeIntent, userId: string, chatId = '', paper = '', estimatedUsd = 0): Promise<string> {
     if (!intent.limitPrice) throw new Error('Limit price not specified. Example: "buy BTC at $60000"');
     if (!intent.amount) throw new Error('Amount not specified. Example: "buy 0.1 BTC at $60000"');
 
@@ -250,7 +273,7 @@ export class Engine {
       : intent.amount;
     const side = (intent.side ?? 'buy') as 'buy' | 'sell';
     const order = await provider.limitOrder(symbol, side, baseAmount, intent.limitPrice);
-    this.risk.recordOrder(userId, await this.estimateUsd(provider, intent));
+    await this.risk.recordOrder(userId, estimatedUsd);
     return `${paper}✅ Limit ${side} order placed\n${order.amount} ${intent.asset} @ $${intent.limitPrice.toLocaleString()}\nOrder ID: ${order.id} — ${order.status}`;
   }
 

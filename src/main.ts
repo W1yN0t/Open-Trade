@@ -30,7 +30,7 @@ const alertService = new AlertService(storage);
 const analyticsService = new AnalyticsService(storage);
 const engine = new Engine(
   credentialService, providerRegistry, Config.credentials.masterPassword,
-  { paperMode: Config.paper.enabled },
+  { paperMode: Config.paper.enabled, storage },
   dcaService, alertService, analyticsService,
 );
 const scheduler = new Scheduler(storage, engine, telegram);
@@ -53,6 +53,16 @@ async function runTrade(
   const send = edit
     ? (text: string) => telegram.editMessage(chatId, messageId, text)
     : (text: string) => telegram.sendMessage({ chatId, text }).then(() => {});
+
+  // Atomically claim this confirmation for execution. If another concurrent
+  // handler (double-click, retry) already moved it past CONFIRMED, bail out
+  // before placing a duplicate order.
+  const claimed = await storage.tryTransitionConfirmation(
+    confirmation.id,
+    { state: 'CONFIRMED' },
+    { state: 'EXECUTING' },
+  );
+  if (!claimed) return;
 
   await send('⏳ Executing...');
   try {
@@ -78,9 +88,13 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
     if (active?.subState === 'WAITING_AMOUNT') {
       const { valid, nextAction } = await confirmationService.handleAmountInput(active, msg.text, storage);
 
-      if (!valid) {
-        await telegram.sendMessage({ chatId: msg.chatId, text: '❌ Amount doesn\'t match. Confirmation cancelled.' });
-        await storage.logTrade({ userId: msg.userId, action: active.intent.action, intent: active.intent, result: 'Invalid amount input — confirmation cancelled', status: 'cancelled' });
+      if (nextAction === 'already_handled') {
+        // Either the user already cancelled this from another tab, or a concurrent
+        // input mismatch already terminated it. Stay quiet.
+        if (!valid) {
+          await telegram.sendMessage({ chatId: msg.chatId, text: '❌ Amount doesn\'t match. Confirmation cancelled.' });
+          await storage.logTrade({ userId: msg.userId, action: active.intent.action, intent: active.intent, result: 'Invalid amount input — confirmation cancelled', status: 'cancelled' });
+        }
         return;
       }
 
@@ -155,6 +169,8 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
     // High-confidence trade → create confirmation and show card with buttons
     const estimatedUsd = await engine.estimateUsdForIntent(intent, msg.userId);
     const confirmation = await confirmationService.create(msg.userId, msg.chatId, intent, storage);
+    // estimatedUsd may be null (price/balance lookup failed) — getConfirmationLevel
+    // treats that as critical so risky base-amount trades cannot slip through.
     const level = getConfirmationLevel(intent, estimatedUsd);
     const cardText = formatConfirmationCard(intent, level);
 

@@ -125,12 +125,16 @@ describe('Engine — paper mode', () => {
     expect(credentialService.list).not.toHaveBeenCalled();
   });
 
-  it('uses shared paper provider across users', async () => {
+  it('isolates paper balances per user', async () => {
     const engine = makeEngine({ paperMode: true });
-    // Both users hit the same paper provider — balance decrements
+    // Alice spends some of her starting paper USDT
     await engine.execute(intent({ amount: 100, amountType: 'quote' }), 'alice');
-    await engine.execute(intent({ amount: 100, amountType: 'quote' }), 'bob');
-    const portfolio = await engine.execute(intent({ action: 'portfolio', amount: null }), 'alice');
-    expect(portfolio).toContain('Portfolio');
+
+    const alicePortfolio = await engine.execute(intent({ action: 'portfolio', amount: null }), 'alice');
+    const bobPortfolio = await engine.execute(intent({ action: 'portfolio', amount: null }), 'bob');
+
+    // Alice's portfolio reflects her purchase, Bob still has the full $10k untouched.
+    expect(alicePortfolio).toContain('BTC');
+    expect(bobPortfolio).not.toContain('BTC');
   });
 });

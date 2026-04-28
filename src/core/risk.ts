@@ -1,4 +1,5 @@
 import type { TradeIntent } from './intent_parser.ts';
+import type { PostgresStorage } from '../storage/postgres.ts';
 
 export interface RiskConfig {
   maxOrderUsd: number;       // default 1000
@@ -11,7 +12,7 @@ const DEFAULT_CONFIG: RiskConfig = {
   maxOrderUsd: Number(process.env.RISK_MAX_ORDER_USD ?? 1000),
   maxOrdersPerMinute: Number(process.env.RISK_MAX_ORDERS_PER_MINUTE ?? 5),
   largOrderCooldownMs: Number(process.env.RISK_LARGE_ORDER_COOLDOWN_MS ?? 60_000),
-  largeOrderThresholdUsd: 500,
+  largeOrderThresholdUsd: Number(process.env.RISK_LARGE_ORDER_THRESHOLD_USD ?? 500),
 };
 
 interface UserState {
@@ -20,15 +21,23 @@ interface UserState {
 }
 
 export class RiskManager {
+  // In-memory cache, hydrated lazily from storage on first touch per user.
+  // Tests construct without storage and rely on this map only.
   private state = new Map<string, UserState>();
+  // Tracks userIds whose state has already been hydrated from the DB so we
+  // don't re-read on every check.
+  private hydrated = new Set<string>();
   private config: RiskConfig;
 
-  constructor(config: Partial<RiskConfig> = {}) {
+  constructor(
+    config: Partial<RiskConfig> = {},
+    private readonly storage?: PostgresStorage,
+  ) {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
   // Returns error string if blocked, null if allowed
-  check(userId: string, intent: TradeIntent, estimatedUsd: number): string | null {
+  async check(userId: string, intent: TradeIntent, estimatedUsd: number): Promise<string | null> {
     // Margin trading guard — block futures/margin actions
     if (this.isMarginAction(intent)) {
       return '⚠️ Margin and futures trading are disabled. Only spot orders are supported.';
@@ -40,7 +49,7 @@ export class RiskManager {
     }
 
     const now = Date.now();
-    const state = this.getState(userId);
+    const state = await this.getState(userId);
 
     // Cooldown after large order
     if (
@@ -61,23 +70,50 @@ export class RiskManager {
     return null;
   }
 
-  // Call after a successful order execution
-  recordOrder(userId: string, estimatedUsd: number): void {
-    const state = this.getState(userId);
+  // Call after a successful order execution. Persists the updated state if
+  // a storage backend is configured so cooldowns survive restarts.
+  async recordOrder(userId: string, estimatedUsd: number): Promise<void> {
+    const state = await this.getState(userId);
     state.orderTimestamps.push(Date.now());
     if (estimatedUsd >= this.config.largeOrderThresholdUsd) {
       state.lastLargeOrderAt = Date.now();
     }
+    await this.persist(userId, state);
   }
 
-  private isMarginAction(_intent: TradeIntent): boolean {
-    return false;
+  private isMarginAction(intent: TradeIntent): boolean {
+    const haystack = `${intent.asset ?? ''} ${intent.quoteCurrency ?? ''}`.toUpperCase();
+    return /(?:^|[^A-Z])(PERP|SWAP|FUT|FUTURES?|MARGIN|LEVERAGE|LEVERAGED|SHORT)(?:[^A-Z]|$)/.test(haystack);
   }
 
-  private getState(userId: string): UserState {
-    if (!this.state.has(userId)) {
-      this.state.set(userId, { orderTimestamps: [], lastLargeOrderAt: null });
+  private async getState(userId: string): Promise<UserState> {
+    let cached = this.state.get(userId);
+    if (cached && this.hydrated.has(userId)) return cached;
+
+    if (this.storage && !this.hydrated.has(userId)) {
+      const persisted = await this.storage.getRiskState(userId);
+      cached = {
+        orderTimestamps: persisted.recentOrderTimestamps,
+        lastLargeOrderAt: persisted.lastLargeOrderAt?.getTime() ?? null,
+      };
+      this.state.set(userId, cached);
+      this.hydrated.add(userId);
+      return cached;
     }
-    return this.state.get(userId)!;
+
+    if (!cached) {
+      cached = { orderTimestamps: [], lastLargeOrderAt: null };
+      this.state.set(userId, cached);
+    }
+    this.hydrated.add(userId);
+    return cached;
+  }
+
+  private async persist(userId: string, state: UserState): Promise<void> {
+    if (!this.storage) return;
+    await this.storage.saveRiskState(userId, {
+      recentOrderTimestamps: state.orderTimestamps,
+      lastLargeOrderAt: state.lastLargeOrderAt !== null ? new Date(state.lastLargeOrderAt) : null,
+    });
   }
 }
