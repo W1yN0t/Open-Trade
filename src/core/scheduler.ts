@@ -1,7 +1,13 @@
 import type { PostgresStorage } from '../storage/postgres.ts';
 import type { Engine } from './engine.ts';
-import type { MessengerAdapter } from '../messengers/base.ts';
+import { MessengerHub } from '../messengers/hub.ts';
 import type { TradeIntent } from './intent_parser.ts';
+
+// Recover the messenger source from a fully-qualified userId. Legacy rows
+// (pre-multi-messenger) are unprefixed — assume Telegram for those.
+function sourceOf(userId: string): string {
+  return MessengerHub.parseSource(userId)?.source ?? 'telegram';
+}
 
 export class Scheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -9,7 +15,7 @@ export class Scheduler {
   constructor(
     private readonly storage: PostgresStorage,
     private readonly engine: Engine,
-    private readonly messenger: MessengerAdapter,
+    private readonly messenger: MessengerHub,
   ) {}
 
   start(): void {
@@ -61,12 +67,14 @@ export class Scheduler {
         });
 
         await this.messenger.sendMessage({
+          source: sourceOf(schedule.userId),
           chatId: schedule.chatId,
           text: `📅 DCA executed\n${result}`,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unknown error';
         await this.messenger.sendMessage({
+          source: sourceOf(schedule.userId),
           chatId: schedule.chatId,
           text: `❌ DCA failed for ${schedule.asset}: ${msg}`,
         }).catch(() => {});
@@ -122,6 +130,7 @@ export class Scheduler {
             await this.storage.markAlertTriggered(alert.id);
             const label = alert.condition === 'above' ? '📈 Take-profit' : '📉 Stop-loss';
             await this.messenger.sendMessage({
+              source: sourceOf(userId),
               chatId,
               text: `${label} triggered @ $${price.toLocaleString()}\n${result}`,
             });
@@ -135,6 +144,7 @@ export class Scheduler {
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Unknown error';
             await this.messenger.sendMessage({
+              source: sourceOf(userId),
               chatId,
               text: `❌ Auto-sell failed for ${asset}: ${msg}\n   Alert remains active and will retry next tick.`,
             }).catch(() => {});
@@ -144,6 +154,7 @@ export class Scheduler {
           await this.storage.markAlertTriggered(alert.id);
           const condLabel = alert.condition === 'above' ? 'rose above' : 'dropped below';
           await this.messenger.sendMessage({
+            source: sourceOf(userId),
             chatId,
             text: `🔔 Alert: ${asset} ${condLabel} $${alert.targetPrice.toLocaleString()} (now $${price.toLocaleString()})`,
           }).catch(() => {});

@@ -9,6 +9,8 @@ import {
 import { Config } from '../config.ts';
 
 export class TelegramAdapter extends MessengerAdapter {
+  readonly source = 'telegram';
+
   private bot: Bot;
 
   constructor() {
@@ -20,6 +22,7 @@ export class TelegramAdapter extends MessengerAdapter {
     this.bot.on('message:text', async (ctx: Context) => {
       const msg = ctx.message!;
       await messageHandler({
+        source: this.source,
         userId: String(msg.from!.id),
         chatId: String(msg.chat.id),
         text: msg.text!,
@@ -31,6 +34,7 @@ export class TelegramAdapter extends MessengerAdapter {
       await ctx.answerCallbackQuery();
       const cq = ctx.callbackQuery;
       await callbackHandler(
+        this.source,
         String(ctx.from.id),
         String(cq.message?.chat.id ?? ''),
         String(cq.message?.message_id ?? ''),
@@ -39,8 +43,10 @@ export class TelegramAdapter extends MessengerAdapter {
     });
 
     this.bot.catch((err) => console.error('Telegram error:', err));
-    console.log('Bot started');
-    await this.bot.start();
+    // grammY's bot.start() resolves only when the bot stops — fire and forget
+    // so we don't block the hub from starting other adapters.
+    this.bot.start().catch(err => console.error('Telegram bot stopped:', err));
+    console.log('Telegram adapter started');
   }
 
   async stop(): Promise<void> {

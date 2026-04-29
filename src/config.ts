@@ -2,7 +2,10 @@ import 'dotenv/config';
 
 export const Config = {
   telegram: {
-    token: process.env.TELEGRAM_BOT_TOKEN!,
+    token: process.env.TELEGRAM_BOT_TOKEN ?? '',
+  },
+  discord: {
+    token: process.env.DISCORD_BOT_TOKEN ?? '',
   },
   database: {
     url: process.env.DATABASE_URL!,

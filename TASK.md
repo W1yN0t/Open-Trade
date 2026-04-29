@@ -237,10 +237,43 @@ so each is a thin adapter on top of the existing `getModel()` factory.
 
 ## Phase 8 — Multi-Messenger
 
-- [ ] `MessengerAdapter` ABC (send_message, send_confirmation_card, on_message, on_button)
-- [ ] Discord adapter
+Goal: let the same bot serve users on more than one chat platform without
+duplicating any business logic. The intent parser, confirmation flow, engine,
+and scheduler must remain messenger-agnostic. Each adapter is a thin shell
+that maps the platform's primitives to a common contract.
+
+### 8.1 Multi-messenger structure (ships with this phase)
+
+- [x] `MessengerAdapter` ABC (`send_message`, `send_with_keyboard`,
+      `edit_message`, `start`, `stop`) — already defined in
+      `src/messengers/base.ts`.
+- [x] `MessengerHub` — fan-in for inbound events from any registered adapter,
+      fan-out for outbound replies based on the originating source. Tags every
+      `userId` with a messenger prefix (`telegram:123`, `discord:456`) so the
+      DB layer can keep a single `userId` namespace without collisions.
+- [x] `IncomingMessage` and `CallbackHandler` carry a `source` field naming
+      the adapter the event came from; `runTrade` and `Scheduler` use it to
+      route replies back to the right platform.
+- [x] `main.ts` registers each adapter conditionally on its token being set
+      so a deploy without (e.g.) `DISCORD_BOT_TOKEN` still boots cleanly with
+      Telegram only.
+
+### 8.2 Discord adapter (ships with this phase)
+
+- [x] Add `discord.js` dependency.
+- [x] `src/messengers/discord.ts` implementing `MessengerAdapter`:
+      DMs and mentions in guild channels become `IncomingMessage`s; inline
+      `ButtonBuilder` rows back `sendWithKeyboard` / `editMessage`.
+- [x] Use `MessageContent`, `GuildMessages`, `DirectMessages` intents.
+- [x] `DISCORD_BOT_TOKEN` env var; documented in `.env.example`.
+- [x] Smoke-tested: confirmation card with ✅ / ❌ buttons works end-to-end on
+      Discord just like on Telegram.
+
+### 8.3 Future adapters (out of scope for this phase)
+
 - [ ] WhatsApp adapter (Business API / Twilio)
 - [ ] Web UI (fallback chat interface)
+- [ ] Slack adapter
 
 ---
 

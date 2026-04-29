@@ -1,5 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { TelegramAdapter } from './messengers/telegram.ts';
+import { DiscordAdapter } from './messengers/discord.ts';
+import { MessengerHub } from './messengers/hub.ts';
 import { PostgresStorage } from './storage/postgres.ts';
 import { chat } from './core/chat.ts';
 import { parseIntent, isTradeIntent, formatClarification, READ_ONLY_ACTIONS } from './core/intent_parser.ts';
@@ -20,7 +22,6 @@ import { checkLlmHealth } from './llm/health.ts';
 
 const prisma = new PrismaClient();
 const storage = new PostgresStorage(prisma);
-const telegram = new TelegramAdapter();
 const confirmationService = new ConfirmationService();
 const credentialService = new CredentialService(prisma);
 
@@ -33,7 +34,24 @@ const engine = new Engine(
   { paperMode: Config.paper.enabled, storage },
   dcaService, alertService, analyticsService,
 );
-const scheduler = new Scheduler(storage, engine, telegram);
+
+// ── Messenger hub ─────────────────────────────────────────────────────────────
+//
+// Each adapter is registered conditionally on its token being set, so a
+// deploy that only configures Telegram still boots cleanly. The hub tags
+// every userId with its source ("telegram:123", "discord:456") so the DB
+// stays in one namespace while replies route back to the right platform.
+
+const hub = new MessengerHub();
+if (Config.telegram.token) hub.register(new TelegramAdapter());
+if (Config.discord.token) hub.register(new DiscordAdapter(Config.discord.token));
+if (hub.size() === 0) {
+  console.error('No messenger adapters configured. Set TELEGRAM_BOT_TOKEN or DISCORD_BOT_TOKEN.');
+  process.exit(1);
+}
+console.log(`Messengers: ${hub.sources().join(', ')}`);
+
+const scheduler = new Scheduler(storage, engine, hub);
 
 if (Config.paper.enabled) {
   console.log('⚠️  PAPER TRADING MODE — no real orders will be placed');
@@ -43,6 +61,12 @@ scheduler.start();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// Recover the messenger source from a fully-qualified userId. Legacy rows
+// (pre-multi-messenger) are unprefixed — assume Telegram for those.
+function sourceOf(userId: string): string {
+  return MessengerHub.parseSource(userId)?.source ?? 'telegram';
+}
+
 async function runTrade(
   confirmation: { id: string; intent: import('./core/intent_parser.ts').TradeIntent },
   userId: string,
@@ -50,9 +74,10 @@ async function runTrade(
   messageId: string,
   edit: boolean,
 ): Promise<void> {
+  const source = sourceOf(userId);
   const send = edit
-    ? (text: string) => telegram.editMessage(chatId, messageId, text)
-    : (text: string) => telegram.sendMessage({ chatId, text }).then(() => {});
+    ? (text: string) => hub.editMessage(source, chatId, messageId, text)
+    : (text: string) => hub.sendMessage({ source, chatId, text });
 
   // Atomically claim this confirmation for execution. If another concurrent
   // handler (double-click, retry) already moved it past CONFIRMED, bail out
@@ -80,7 +105,11 @@ async function runTrade(
 
 // ── Message handler ───────────────────────────────────────────────────────────
 
-const messageHandler = async (msg: { userId: string; chatId: string; text: string; messageId: string }) => {
+const messageHandler = async (msg: { source?: string; userId: string; chatId: string; text: string; messageId: string }) => {
+  // The hub always stamps source onto the message; tolerate a missing field
+  // so unit tests can construct one without bothering with the prefix.
+  const source = msg.source ?? sourceOf(msg.userId);
+
   try {
     // Check if user has a pending confirmation waiting for text input
     const active = await confirmationService.getActiveForUser(msg.userId, storage);
@@ -89,17 +118,16 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
       const { valid, nextAction } = await confirmationService.handleAmountInput(active, msg.text, storage);
 
       if (nextAction === 'already_handled') {
-        // Either the user already cancelled this from another tab, or a concurrent
-        // input mismatch already terminated it. Stay quiet.
         if (!valid) {
-          await telegram.sendMessage({ chatId: msg.chatId, text: '❌ Amount doesn\'t match. Confirmation cancelled.' });
+          await hub.sendMessage({ source, chatId: msg.chatId, text: '❌ Amount doesn\'t match. Confirmation cancelled.' });
           await storage.logTrade({ userId: msg.userId, action: active.intent.action, intent: active.intent, result: 'Invalid amount input — confirmation cancelled', status: 'cancelled' });
         }
         return;
       }
 
       if (nextAction === 'ask_reconfirm') {
-        await telegram.sendWithKeyboard(
+        await hub.sendWithKeyboard(
+          source,
           msg.chatId,
           '⚠️ Amount confirmed. This is a critical trade — press Execute to proceed.',
           [
@@ -116,7 +144,7 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
     }
 
     if (active?.subState === 'WAITING_RECONFIRM') {
-      await telegram.sendMessage({ chatId: msg.chatId, text: 'Please press the ✅ Execute button to proceed.' });
+      await hub.sendMessage({ source, chatId: msg.chatId, text: 'Please press the ✅ Execute button to proceed.' });
       return;
     }
 
@@ -126,7 +154,7 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
 
     if (intent.type === 'chat' || intent.confidence < 0.5) {
       const response = await chat(msg.userId, msg.text, storage);
-      await telegram.sendMessage({ chatId: msg.chatId, text: response });
+      await hub.sendMessage({ source, chatId: msg.chatId, text: response });
       return;
     }
 
@@ -134,7 +162,7 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
     if (intent.action === 'history' && intent.confidence >= 0.8) {
       const rows = await storage.getTradeHistory(msg.userId);
       if (rows.length === 0) {
-        await telegram.sendMessage({ chatId: msg.chatId, text: '📋 No trades yet.' });
+        await hub.sendMessage({ source, chatId: msg.chatId, text: '📋 No trades yet.' });
       } else {
         const lines = ['📋 Trade History\n'];
         for (const r of rows) {
@@ -144,7 +172,7 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
           const summary = `${action} ${r.intent.asset ?? ''}${r.intent.amount ? ` ${r.intent.amount}` : ''}`.trim();
           lines.push(`${icon} ${date} — ${summary}`);
         }
-        await telegram.sendMessage({ chatId: msg.chatId, text: lines.join('\n') });
+        await hub.sendMessage({ source, chatId: msg.chatId, text: lines.join('\n') });
       }
       return;
     }
@@ -153,28 +181,26 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
     if (intent.action !== null && READ_ONLY_ACTIONS.has(intent.action as never) && intent.confidence >= 0.8) {
       try {
         const result = await engine.execute(intent, msg.userId, msg.chatId);
-        await telegram.sendMessage({ chatId: msg.chatId, text: result });
+        await hub.sendMessage({ source, chatId: msg.chatId, text: result });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : 'Unknown error';
-        await telegram.sendMessage({ chatId: msg.chatId, text: `❌ ${errMsg}` });
+        await hub.sendMessage({ source, chatId: msg.chatId, text: `❌ ${errMsg}` });
       }
       return;
     }
 
     if (!isTradeIntent(intent) || intent.confidence < 0.8) {
-      await telegram.sendMessage({ chatId: msg.chatId, text: formatClarification(intent) });
+      await hub.sendMessage({ source, chatId: msg.chatId, text: formatClarification(intent) });
       return;
     }
 
     // High-confidence trade → create confirmation and show card with buttons
     const estimatedUsd = await engine.estimateUsdForIntent(intent, msg.userId);
     const confirmation = await confirmationService.create(msg.userId, msg.chatId, intent, storage);
-    // estimatedUsd may be null (price/balance lookup failed) — getConfirmationLevel
-    // treats that as critical so risky base-amount trades cannot slip through.
     const level = getConfirmationLevel(intent, estimatedUsd);
     const cardText = formatConfirmationCard(intent, level);
 
-    const messageId = await telegram.sendWithKeyboard(msg.chatId, cardText, [
+    const messageId = await hub.sendWithKeyboard(source, msg.chatId, cardText, [
       { label: '✅ Confirm', callbackData: `confirm:${confirmation.id}` },
       { label: '❌ Cancel', callbackData: `cancel:${confirmation.id}` },
     ]);
@@ -182,22 +208,20 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
     await confirmationService.markShown(confirmation.id, messageId, storage);
   } catch (err) {
     console.error('Error handling message:', err);
-    await telegram.sendMessage({ chatId: msg.chatId, text: 'Something went wrong. Please try again.' });
+    await hub.sendMessage({ source, chatId: msg.chatId, text: 'Something went wrong. Please try again.' }).catch(() => {});
   }
 };
 
 // ── Callback handler (inline button clicks) ───────────────────────────────────
 
-// In a group chat or via a forwarded message-with-buttons, a different user's
-// click would otherwise be able to act on someone else's confirmation. Always
-// match the clicker's userId against the confirmation owner before doing
-// anything that mutates state.
+// Cross-user-hijack guard: a clicker in a group/forwarded thread must not be
+// able to act on someone else's confirmation. Owner check happens first.
 async function isOwnedBy(id: string, userId: string): Promise<boolean> {
   const c = await storage.getConfirmationById(id);
   return !!c && c.userId === userId;
 }
 
-const callbackHandler = async (userId: string, chatId: string, messageId: string, data: string) => {
+const callbackHandler = async (source: string, userId: string, chatId: string, messageId: string, data: string) => {
   try {
     if (data.startsWith('confirm:')) {
       const id = data.slice(8);
@@ -207,14 +231,13 @@ const callbackHandler = async (userId: string, chatId: string, messageId: string
       if (action === 'already_handled' || !confirmation) return;
 
       if (action === 'ask_amount') {
-        await telegram.editMessage(
-          chatId, messageId,
+        await hub.editMessage(
+          source, chatId, messageId,
           `To confirm, type the exact amount (${confirmation.intent.amount}):`,
         );
         return;
       }
 
-      // Normal trade confirmed — execute
       await runTrade(confirmation, userId, chatId, messageId, true);
       return;
     }
@@ -241,7 +264,7 @@ const callbackHandler = async (userId: string, chatId: string, messageId: string
         if (confirmation) {
           await storage.logTrade({ userId, action: confirmation.intent.action, intent: confirmation.intent, result: 'Cancelled by user', status: 'cancelled' });
         }
-        await telegram.editMessage(chatId, messageId, '❌ Trade cancelled.');
+        await hub.editMessage(source, chatId, messageId, '❌ Trade cancelled.');
       }
     }
   } catch (err) {
@@ -257,7 +280,7 @@ const expiryInterval = setInterval(async () => {
     await storage.logTrade({ userId: c.userId, action: c.intent.action, intent: c.intent, result: 'Confirmation expired', status: 'expired' }).catch(() => {});
     if (!c.messageId) continue;
     try {
-      await telegram.editMessage(c.chatId, c.messageId, '⏰ Confirmation expired.');
+      await hub.editMessage(sourceOf(c.userId), c.chatId, c.messageId, '⏰ Confirmation expired.');
     } catch {
       // Message too old to edit — ignore
     }
@@ -269,10 +292,10 @@ const expiryInterval = setInterval(async () => {
 process.on('SIGINT', async () => {
   clearInterval(expiryInterval);
   scheduler.stop();
-  await telegram.stop();
+  await hub.stop();
   await storage.disconnect();
   await prisma.$disconnect();
   process.exit(0);
 });
 
-await telegram.start(messageHandler, callbackHandler);
+await hub.start(messageHandler, callbackHandler);
