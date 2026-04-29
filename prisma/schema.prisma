@@ -73,6 +73,10 @@ model DcaSchedule {
   asset         String
   quoteCurrency String
   amount        Float
+  // Original interval expression (e.g. "monthly", "every 2 weeks"). Needed so
+  // the scheduler can use calendar-month arithmetic for monthly schedules
+  // instead of a fixed 30-day approximation.
+  intervalSpec  String?
   intervalMs    Float
   nextRunAt     DateTime
   isActive      Boolean  @default(true)

@@ -92,4 +92,15 @@ export class CredentialService {
     });
     return rows.map((r: { provider: string }) => r.provider);
   }
+
+  // Cheap metadata lookup used by the provider cache to detect credential
+  // rotations — if `updatedAt` changes, the cached connection is stale and
+  // must be re-established with the new keys.
+  async getUpdatedAt(userId: string, provider: string): Promise<Date | null> {
+    const row = await this.prisma.userCredentials.findUnique({
+      where: { userId_provider: { userId, provider } },
+      select: { updatedAt: true },
+    });
+    return row?.updatedAt ?? null;
+  }
 }

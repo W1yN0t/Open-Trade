@@ -8,6 +8,7 @@ import type { TradeIntent } from './intent_parser.ts';
 const credentialService = {
   list: vi.fn().mockResolvedValue(['mock']),
   load: vi.fn().mockResolvedValue({ apiKey: 'k', apiSecret: 's' }),
+  getUpdatedAt: vi.fn().mockResolvedValue(new Date(0)),
 } as any;
 
 const mockClass = MockProvider as unknown as typeof Provider;

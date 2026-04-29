@@ -168,6 +168,7 @@ export class PostgresStorage {
     quoteCurrency: string;
     amount: number;
     intervalMs: number;
+    intervalSpec?: string | null;
     nextRunAt: Date;
   }) {
     return this.prisma.dcaSchedule.create({ data });

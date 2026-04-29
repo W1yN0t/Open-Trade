@@ -26,7 +26,8 @@ export class DcaService {
   constructor(private readonly storage: PostgresStorage) {}
 
   async create(userId: string, chatId: string, intent: TradeIntent): Promise<string> {
-    const intervalMs = parseInterval(intent.interval ?? 'daily');
+    const intervalSpec = intent.interval ?? 'daily';
+    const intervalMs = parseInterval(intervalSpec);
     const nextRunAt = new Date(Date.now() + intervalMs);
 
     const schedule = await this.storage.createDca({
@@ -36,6 +37,7 @@ export class DcaService {
       quoteCurrency: intent.quoteCurrency,
       amount: intent.amount ?? 0,
       intervalMs,
+      intervalSpec,
       nextRunAt,
     });
 

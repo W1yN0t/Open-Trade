@@ -34,7 +34,13 @@ export interface TradeIntent extends RawIntent {
   quoteCurrency: NonNullable<RawIntent['quoteCurrency']>;
 }
 
-export const READ_ONLY_ACTIONS = new Set(['portfolio', 'balance', 'price', 'orders', 'history', 'analytics', 'dca', 'alert'] as const);
+// `dca` is intentionally NOT here — creating a recurring schedule is an
+// auto-execution path and must go through the confirmation flow so the user
+// explicitly opts in to the "trades fire without further prompts" behavior.
+// `alert` (notify-only) stays here because alerts created via this action
+// have no triggerAction; auto-sell alerts (TP/SL) are only created as part
+// of a buy intent and are surfaced on that buy's confirmation card.
+export const READ_ONLY_ACTIONS = new Set(['portfolio', 'balance', 'price', 'orders', 'history', 'analytics', 'alert'] as const);
 
 export interface ChatIntent extends RawIntent {
   type: 'chat';

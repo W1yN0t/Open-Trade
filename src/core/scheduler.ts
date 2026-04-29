@@ -72,8 +72,12 @@ export class Scheduler {
         }).catch(() => {});
       }
 
-      // Advance next run regardless of success/failure
-      const nextRunAt = new Date(schedule.nextRunAt.getTime() + schedule.intervalMs);
+      // Advance next run regardless of success/failure. If the bot was offline
+      // and the schedule is far in the past, naïvely adding intervalMs would
+      // still leave us in the past, causing this same schedule to re-fire on
+      // every tick until catch-up. Instead, anchor to "now + interval" once we
+      // detect the proposed slot is already stale.
+      const nextRunAt = computeNextRun(schedule.nextRunAt, schedule.intervalMs, schedule.intervalSpec);
       await this.storage.updateDcaNextRun(schedule.id, nextRunAt);
     }
   }
@@ -106,13 +110,16 @@ export class Scheduler {
 
         if (!triggered) continue;
 
-        await this.storage.markAlertTriggered(alert.id);
-
         if (alert.triggerAction) {
-          // TP/SL auto-execute
+          // TP/SL auto-execute. Mark the alert triggered ONLY after the trade
+          // succeeds — if execute fails (network, balance, exchange error)
+          // we leave the alert active so the next tick retries the auto-sell.
+          // The previous order (mark-then-execute) silently consumed stop
+          // losses on transient failures.
           const intent = alert.triggerAction as unknown as TradeIntent;
           try {
             const result = await this.engine.execute(intent, userId, chatId);
+            await this.storage.markAlertTriggered(alert.id);
             const label = alert.condition === 'above' ? '📈 Take-profit' : '📉 Stop-loss';
             await this.messenger.sendMessage({
               chatId,
@@ -129,11 +136,12 @@ export class Scheduler {
             const msg = err instanceof Error ? err.message : 'Unknown error';
             await this.messenger.sendMessage({
               chatId,
-              text: `❌ Auto-sell failed for ${asset}: ${msg}`,
+              text: `❌ Auto-sell failed for ${asset}: ${msg}\n   Alert remains active and will retry next tick.`,
             }).catch(() => {});
           }
         } else {
-          // Plain price notification
+          // Plain price notification — mark triggered, no retry semantics needed.
+          await this.storage.markAlertTriggered(alert.id);
           const condLabel = alert.condition === 'above' ? 'rose above' : 'dropped below';
           await this.messenger.sendMessage({
             chatId,
@@ -143,4 +151,32 @@ export class Scheduler {
       }
     }
   }
+}
+
+// Anchors the next run to a sensible slot:
+//  • "monthly" specs use calendar-month arithmetic so the schedule does not
+//    drift by ~5 days/year compared to the user's expectation.
+//  • If the naïvely-advanced slot is still in the past (e.g. the bot was down
+//    for several intervals), we anchor to now + interval to avoid firing the
+//    same schedule on every tick until catch-up.
+export function computeNextRun(prev: Date, intervalMs: number, intervalSpec: string | null = null): Date {
+  const now = Date.now();
+  let next: number;
+
+  if (intervalSpec && /\bmonth(ly)?\b/i.test(intervalSpec)) {
+    const months = intervalSpec.match(/every\s+(\d+)\s+month/i);
+    const n = months ? parseInt(months[1], 10) : 1;
+    const d = new Date(prev);
+    d.setUTCMonth(d.getUTCMonth() + n);
+    next = d.getTime();
+  } else {
+    next = prev.getTime() + intervalMs;
+  }
+
+  if (next <= now) {
+    // Bot was offline for >= one interval. Don't catch up by replaying every
+    // missed tick — anchor to now + interval and move on.
+    return new Date(now + intervalMs);
+  }
+  return new Date(next);
 }

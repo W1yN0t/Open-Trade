@@ -11,9 +11,17 @@ import type { PostgresStorage } from '../storage/postgres.ts';
 const STABLECOINS = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'FDUSD', 'TUSD']);
 const TRADE_ACTIONS = new Set(['buy', 'sell', 'swap', 'limit', 'stop']);
 
+interface CachedProvider {
+  provider: Provider;
+  // Snapshot of UserCredentials.updatedAt at the time we connected; if the
+  // current value differs we know the keys were rotated and the cached
+  // connection is stale.
+  credsUpdatedAt: number;
+}
+
 export class Engine {
   // key: `${userId}:${providerName}` to support multiple exchanges per user
-  private cache = new Map<string, Provider>();
+  private cache = new Map<string, CachedProvider>();
   private risk: RiskManager;
   // paper-mode balances are per-user — sharing one PaperProvider across
   // users would let them see and spend each other's simulated funds.
@@ -86,12 +94,27 @@ export class Engine {
     }
   }
 
+  // Tracks which (userId, providerName) pairs we've already warned about so
+  // the same multi-exchange notice doesn't spam logs on every trade.
+  private multiExchangeWarned = new Set<string>();
+
   private async getProvider(userId: string): Promise<Provider> {
     if (this.options.paperMode) return this.getPaperProvider(userId);
 
     const names = await this.credentialService.list(userId);
     if (names.length === 0) {
       throw new Error('No exchange connected. Run: pnpm cli connect <exchange>');
+    }
+
+    if (names.length > 1) {
+      const warnKey = `${userId}:${names[0]}`;
+      if (!this.multiExchangeWarned.has(warnKey)) {
+        this.multiExchangeWarned.add(warnKey);
+        console.warn(
+          `[engine] User ${userId} has multiple exchanges connected (${names.join(', ')}). ` +
+          `Routing trades to "${names[0]}" until per-trade exchange selection is supported.`,
+        );
+      }
     }
 
     return this.loadProvider(userId, names[0]);
@@ -105,7 +128,16 @@ export class Engine {
       throw new Error('No exchange connected. Run: pnpm cli connect <exchange>');
     }
 
-    return Promise.all(names.map(name => this.loadProvider(userId, name)));
+    // Don't let one broken API key wipe out the entire portfolio aggregation —
+    // log + skip failing exchanges instead of rejecting the whole call.
+    const settled = await Promise.allSettled(names.map(name => this.loadProvider(userId, name)));
+    const ok: Provider[] = [];
+    settled.forEach((res, i) => {
+      if (res.status === 'fulfilled') ok.push(res.value);
+      else console.warn(`[engine] Skipping provider "${names[i]}" for user ${userId}: ${res.reason instanceof Error ? res.reason.message : res.reason}`);
+    });
+    if (ok.length === 0) throw new Error('All connected exchanges failed to load. Run: pnpm cli test <exchange>');
+    return ok;
   }
 
   private getPaperProvider(userId: string): PaperProvider {
@@ -117,10 +149,24 @@ export class Engine {
     return provider;
   }
 
+  // Drop cached provider instances for a user — call this from CLI flows that
+  // change the credentials (`connect`, `disconnect`) so the next request
+  // re-authenticates with fresh keys instead of using a stale connection.
+  invalidateProviderCache(userId: string, providerName?: string): void {
+    if (providerName) {
+      this.cache.delete(`${userId}:${providerName}`);
+      return;
+    }
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(`${userId}:`)) this.cache.delete(key);
+    }
+  }
+
   private async loadProvider(userId: string, name: string): Promise<Provider> {
     const cacheKey = `${userId}:${name}`;
+    const credsUpdatedAt = (await this.credentialService.getUpdatedAt(userId, name))?.getTime() ?? 0;
     const cached = this.cache.get(cacheKey);
-    if (cached) return cached;
+    if (cached && cached.credsUpdatedAt === credsUpdatedAt) return cached.provider;
 
     const ProviderClass = this.providerRegistry.get(name);
     if (!ProviderClass) throw new Error(`Provider "${name}" is not installed`);
@@ -130,7 +176,7 @@ export class Engine {
     const ok = await provider.connect(credentials);
     if (!ok) throw new Error(`Could not connect to ${name}. Check your API keys with: pnpm cli test ${name}`);
 
-    this.cache.set(cacheKey, provider);
+    this.cache.set(cacheKey, { provider, credsUpdatedAt });
     return provider;
   }
 

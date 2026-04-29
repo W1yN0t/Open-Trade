@@ -188,10 +188,20 @@ const messageHandler = async (msg: { userId: string; chatId: string; text: strin
 
 // ── Callback handler (inline button clicks) ───────────────────────────────────
 
+// In a group chat or via a forwarded message-with-buttons, a different user's
+// click would otherwise be able to act on someone else's confirmation. Always
+// match the clicker's userId against the confirmation owner before doing
+// anything that mutates state.
+async function isOwnedBy(id: string, userId: string): Promise<boolean> {
+  const c = await storage.getConfirmationById(id);
+  return !!c && c.userId === userId;
+}
+
 const callbackHandler = async (userId: string, chatId: string, messageId: string, data: string) => {
   try {
     if (data.startsWith('confirm:')) {
       const id = data.slice(8);
+      if (!(await isOwnedBy(id, userId))) return;
       const { action, confirmation } = await confirmationService.handleConfirmButton(id, storage);
 
       if (action === 'already_handled' || !confirmation) return;
@@ -211,6 +221,7 @@ const callbackHandler = async (userId: string, chatId: string, messageId: string
 
     if (data.startsWith('reconfirm:')) {
       const id = data.slice(10);
+      if (!(await isOwnedBy(id, userId))) return;
       const { action } = await confirmationService.handleReconfirmButton(id, storage);
       if (action !== 'confirmed') return;
 
@@ -223,6 +234,7 @@ const callbackHandler = async (userId: string, chatId: string, messageId: string
 
     if (data.startsWith('cancel:')) {
       const id = data.slice(7);
+      if (!(await isOwnedBy(id, userId))) return;
       const cancelled = await confirmationService.handleCancelButton(id, storage);
       if (cancelled) {
         const confirmation = await storage.getConfirmationById(id);
